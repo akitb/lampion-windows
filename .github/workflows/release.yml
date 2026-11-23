@@ -27,6 +27,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      # actions/checkout turns the pushed tag into a lightweight one, losing its message (the What's new
+      # text); fetch the real tag objects again.
+      - name: Fetch the annotated tags
+        run: git fetch --force --tags origin
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
