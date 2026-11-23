@@ -138,6 +138,11 @@ pub fn run() {
             database::structure_commands::db_create_table,
             database::structure_commands::db_create_database,
             // ---- database (designer) ----
+            database::designer_commands::db_designer_schema,
+            database::designer_commands::db_designer_preview,
+            database::designer_commands::db_designer_add_relation,
+            database::designer_commands::db_designer_drop_relation,
+            database::designer_commands::db_designer_save_positions,
             // ---- app (updater, selftest, quit) ----
             app::commands::update_check,
             app::commands::update_state,
