@@ -37,10 +37,18 @@
       "icons/icon.ico"
     ],
     "publisher": "akitb",
+    "copyright": "Copyright akitb",
+    "category": "DeveloperTool",
+    "homepage": "https://github.com/akitb/lampion-windows",
     "shortDescription": "Local Apache, PHP and MariaDB control panel",
+    "longDescription": "Lampion runs Apache, PHP, MariaDB and phpMyAdmin on this computer from one window, with live logs, settings forms and a built-in database manager.",
     "windows": {
       "nsis": {
-        "installMode": "currentUser"
+        "installMode": "currentUser",
+        "installerIcon": "icons/icon.ico",
+        "installerHooks": "windows/hooks.nsh",
+        "languages": ["English"],
+        "displayLanguageSelector": false
       }
     }
   }

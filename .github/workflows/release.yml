@@ -1,0 +1,118 @@
+# Builds the Windows installer when a version tag (v1.2 or v1.2.3) is pushed and publishes the GitHub
+# release the app updates from: the installer as Lampion-X.Y-setup.exe, the server package list
+# (manifest.json, read by first setup) and release notes in the format the updater shows
+# ("## What's new" is shown; "## Install", "## Requirements" and the SHA-256 line are not).
+#
+# What's new comes from the tag's message (git tag -a v1.2 -m "- First change"), or, for a plain tag,
+# from the commit subjects since the previous tag.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    env:
+      # Built into the app: the updater and first setup read the releases of this repository, so a
+      # fork updates from its own releases.
+      LAMPION_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Take the version from the tag
+        id: version
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $short = $tag.Substring(1)
+          if ($short -notmatch '^\d+\.\d+(\.\d+)?$') { throw "Version tags look like v1.2 or v1.2.3, not $tag." }
+          $semver = if ($short.Split('.').Count -eq 2) { "$short.0" } else { $short }
+          # The app reports this version and the updater compares it with the next release.
+          $cargo = Get-Content src-tauri/Cargo.toml -Raw
+          $cargo = ([regex]'(?m)^version = "[^"]*"').Replace($cargo, "version = `"$semver`"", 1)
+          Set-Content src-tauri/Cargo.toml $cargo -NoNewline
+          $conf = Get-Content src-tauri/tauri.conf.json -Raw
+          $conf = ([regex]'"version":\s*"[^"]*"').Replace($conf, "`"version`": `"$semver`"", 1)
+          Set-Content src-tauri/tauri.conf.json $conf -NoNewline
+          "short=$short" >> $env:GITHUB_OUTPUT
+
+      - name: Install the npm packages
+        run: npm ci
+
+      - name: Build the installer
+        run: npm run tauri build -- --bundles nsis
+
+      - name: Name the installer and write the release notes
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $version = "${{ steps.version.outputs.short }}"
+          $installer = "Lampion-$version-setup.exe"
+          $built = Get-ChildItem src-tauri/target/release/bundle/nsis -Filter *-setup.exe | Select-Object -First 1
+          if (-not $built) { throw "The NSIS installer was not built." }
+          Copy-Item $built.FullName $installer
+          $sha = (Get-FileHash $installer -Algorithm SHA256).Hash.ToLower()
+
+          $notes = ""
+          if ((git cat-file -t $tag) -eq "tag") {
+            $notes = (git tag -l --format='%(contents:body)' $tag | Out-String).Trim()
+            if (-not $notes) { $notes = (git tag -l --format='%(contents:subject)' $tag | Out-String).Trim() }
+          }
+          if (-not $notes) {
+            $previous = git describe --tags --abbrev=0 "$tag^" 2>$null
+            $range = if ($LASTEXITCODE -eq 0 -and $previous) { "$previous..$tag" } else { $tag }
+            $notes = (git log --no-merges --pretty=format:"- %s" $range | Out-String).Trim()
+          }
+
+          $body = @"
+          ## What's new
+
+          $notes
+
+          ## Install
+
+          1. Download **$installer** below and open it. It installs Lampion for your Windows account only, without administrator rights, into ``%LOCALAPPDATA%\Programs\Lampion``, and adds it to the Start menu.
+          2. Windows SmartScreen may say "Windows protected your PC", because the installer is not code-signed yet. Click **More info**, then **Run anyway**. (This is the Windows version of "Open Anyway" on macOS.)
+          3. If the Microsoft Visual C++ runtime is missing, the installer offers it, and Windows asks for permission once.
+          4. On first launch Lampion downloads Apache, PHP, MariaDB and phpMyAdmin into ``C:\Lampion`` (you can choose another folder) and starts them.
+
+          Already using Lampion? It finds this version by itself and updates in a few seconds; the servers keep running.
+
+          ## Requirements
+
+          - Windows 10 version 1809 or later, or Windows 11, 64-bit
+          - About 1 GB of free disk space for the servers and your data
+          - An internet connection for the first setup and for updates
+
+          SHA-256 of the installer: ``$sha``
+          "@
+          Set-Content notes.md $body -Encoding utf8
+          Get-Content notes.md
+
+      - name: Publish the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = "${{ steps.version.outputs.short }}"
+          gh release create "${{ github.ref_name }}" "Lampion-$version-setup.exe" src-tauri/src/servers/manifest.json `
+            --title "Lampion $version" --notes-file notes.md --verify-tag
