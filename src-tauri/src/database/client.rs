@@ -37,6 +37,11 @@ pub fn port() -> u16 {
     TARGET.lock().unwrap().port
 }
 
+/// The root password the user gave (in memory only), for mariadb-dump / mariadb.exe.
+pub fn password() -> Option<String> {
+    TARGET.lock().unwrap().password.clone()
+}
+
 fn opts() -> Opts {
     let t = TARGET.lock().unwrap();
     OptsBuilder::default()
@@ -144,7 +149,7 @@ pub struct SqlLogEntry {
 }
 
 /// Every statement Lampion runs goes to the SQL console (`database://sql`).
-fn log_sql(sql: &str, error: Option<&String>, started: std::time::Instant) {
+pub fn log_sql(sql: &str, error: Option<&String>, started: std::time::Instant) {
     crate::core::emit(
         "database://sql",
         SqlLogEntry { sql: sql.to_string(), error: error.cloned(), millis: started.elapsed().as_millis() as u64 },

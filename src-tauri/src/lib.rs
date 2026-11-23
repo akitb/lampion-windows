@@ -93,6 +93,27 @@ pub fn run() {
             config::commands::config_set_open_at_login,
             // ---- logs ----
             // ---- database (data, query, sidebar) ----
+            database::commands::db_connect,
+            database::commands::db_set_password,
+            database::commands::db_tables,
+            database::commands::db_columns,
+            database::commands::db_page,
+            database::commands::db_update_row,
+            database::commands::db_insert_row,
+            database::commands::db_delete_rows,
+            database::commands::db_empty_table,
+            database::commands::db_drop_table,
+            database::commands::db_drop_database,
+            database::commands::db_run_query,
+            database::commands::db_history,
+            database::commands::db_history_clear,
+            database::commands::db_complete,
+            database::commands::db_syntax,
+            database::commands::db_syntax_marks,
+            database::commands::db_insert_text,
+            database::commands::db_export,
+            database::commands::db_import,
+            database::commands::db_show_main_window,
             // ---- database (structure, designer) ----
             // ---- app (updater, selftest, quit) ----
         ])
