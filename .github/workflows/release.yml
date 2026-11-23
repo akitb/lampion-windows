@@ -38,13 +38,17 @@ jobs:
         with:
           workspaces: src-tauri
 
+      # Workflow values reach the scripts only through env: never pasted into script text, where a tag
+      # name could carry PowerShell code. The tag is checked before anything uses it.
       - name: Take the version from the tag
         id: version
         shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }}
         run: |
-          $tag = "${{ github.ref_name }}"
+          $tag = $env:TAG
+          if ($tag -cnotmatch '^v[0-9]+\.[0-9]+(\.[0-9]+)?$') { throw "Version tags look like v1.2 or v1.2.3, not $tag." }
           $short = $tag.Substring(1)
-          if ($short -notmatch '^\d+\.\d+(\.\d+)?$') { throw "Version tags look like v1.2 or v1.2.3, not $tag." }
           $semver = if ($short.Split('.').Count -eq 2) { "$short.0" } else { $short }
           # The app reports this version and the updater compares it with the next release.
           $cargo = Get-Content src-tauri/Cargo.toml -Raw
@@ -63,9 +67,12 @@ jobs:
 
       - name: Name the installer and write the release notes
         shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ steps.version.outputs.short }}
         run: |
-          $tag = "${{ github.ref_name }}"
-          $version = "${{ steps.version.outputs.short }}"
+          $tag = $env:TAG
+          $version = $env:VERSION
           $installer = "Lampion-$version-setup.exe"
           $built = Get-ChildItem src-tauri/target/release/bundle/nsis -Filter *-setup.exe | Select-Object -First 1
           if (-not $built) { throw "The NSIS installer was not built." }
@@ -112,7 +119,9 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ steps.version.outputs.short }}
         run: |
-          $version = "${{ steps.version.outputs.short }}"
-          gh release create "${{ github.ref_name }}" "Lampion-$version-setup.exe" src-tauri/src/servers/manifest.json `
+          $version = $env:VERSION
+          gh release create $env:TAG "Lampion-$version-setup.exe" src-tauri/src/servers/manifest.json `
             --title "Lampion $version" --notes-file notes.md --verify-tag
