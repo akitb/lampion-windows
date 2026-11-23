@@ -12,6 +12,13 @@ use std::time::Instant;
 
 /// At most this many rows of one result set are kept, so a `SELECT *` on a huge table can't exhaust memory.
 pub const MAX_ROWS: usize = 100_000;
+/// Grid results also stop at about this many bytes of cell text.
+pub const MAX_BYTES: usize = 64 * 1024 * 1024;
+
+/// Changes (row edits, structure) run strict: a value that doesn't fit fails instead of being stored as
+/// 0 or '' with a warning, as Lampion's "Relaxed" mode would. `literal()` escapes with backslashes, so
+/// NO_BACKSLASH_ESCAPES goes. The pool resets the session when the connection goes back.
+pub const STRICT: &str = "SET SESSION sql_mode = CONCAT(REPLACE(@@sql_mode, 'NO_BACKSLASH_ESCAPES', ''), ',STRICT_ALL_TABLES')";
 
 /// Rows of one result set, cells as text (`None` = NULL).
 #[derive(Debug, Clone, Default, Serialize)]
@@ -19,6 +26,8 @@ pub const MAX_ROWS: usize = 100_000;
 pub struct Grid {
     pub columns: Vec<String>,
     pub rows: Vec<Vec<Option<String>>>,
+    /// `[row, column]` of the cells cut to `format::MAX_CELL` (grid results only).
+    pub cut: Vec<[usize; 2]>,
 }
 
 /// One result of a statement: a grid when it returned columns, else the affected-row count.
@@ -26,22 +35,38 @@ pub struct Grid {
 pub struct Outcome {
     pub grid: Option<Grid>,
     pub affected: u64,
-    /// More rows came than `MAX_ROWS`; only the first ones are in `grid`.
+    /// More rows came than `MAX_ROWS` (or `MAX_BYTES`); only the first ones are in `grid`.
     pub truncated: bool,
 }
 
-async fn drain<P: Protocol>(mut r: QueryResult<'_, 'static, P>) -> Result<Vec<Outcome>, mysql_async::Error> {
+/// `cut`: long cells are cut for the grid and the result stops at `MAX_BYTES`; otherwise values are whole.
+async fn drain<P: Protocol>(mut r: QueryResult<'_, 'static, P>, cut: bool) -> Result<Vec<Outcome>, mysql_async::Error> {
+    let max_cell = if cut { format::MAX_CELL } else { usize::MAX };
+    let max_bytes = if cut { MAX_BYTES } else { usize::MAX };
     let mut out = Vec::new();
     loop {
         let columns = r.columns().map(|c| c.to_vec()).unwrap_or_default();
         let affected = r.affected_rows();
         let binary: Vec<bool> = columns.iter().map(format::is_binary_column).collect();
         let mut truncated = false;
-        // Rows are converted as they arrive; past MAX_ROWS they are read and dropped.
+        let mut cuts: Vec<[usize; 2]> = Vec::new();
+        let mut bytes = 0usize;
+        // Rows are converted as they arrive; past the limits they are read and dropped.
         let rows = r
             .reduce(Vec::new(), |mut acc: Vec<Vec<Option<String>>>, row: Row| {
-                if acc.len() < MAX_ROWS {
-                    acc.push((0..row.len()).map(|i| row.as_ref(i).and_then(|v| format::cell(v, binary.get(i) == Some(&true)))).collect());
+                if acc.len() < MAX_ROWS && bytes < max_bytes {
+                    let n = acc.len();
+                    let cells = (0..row.len())
+                        .map(|i| {
+                            let (v, was_cut) = row.as_ref(i).map_or((None, false), |v| format::grid_cell(v, binary.get(i) == Some(&true), max_cell));
+                            if was_cut {
+                                cuts.push([n, i]);
+                            }
+                            bytes = bytes.saturating_add(v.as_ref().map_or(0, String::len));
+                            v
+                        })
+                        .collect();
+                    acc.push(cells);
                 } else {
                     truncated = true;
                 }
@@ -52,7 +77,7 @@ async fn drain<P: Protocol>(mut r: QueryResult<'_, 'static, P>) -> Result<Vec<Ou
             out.push(Outcome { grid: None, affected, truncated: false });
         } else {
             let columns = columns.iter().map(|c| c.name_str().into_owned()).collect();
-            out.push(Outcome { grid: Some(Grid { columns, rows }), affected: 0, truncated });
+            out.push(Outcome { grid: Some(Grid { columns, rows, cut: cuts }), affected: 0, truncated });
         }
         if r.is_empty() {
             return Ok(out);
@@ -60,16 +85,22 @@ async fn drain<P: Protocol>(mut r: QueryResult<'_, 'static, P>) -> Result<Vec<Ou
     }
 }
 
-/// Runs one statement (text protocol without parameters, so any SQL works).
+/// Runs one statement (text protocol without parameters, so any SQL works); values whole.
 pub async fn statement(conn: &mut Conn, sql: &str, params: &[String]) -> Result<Vec<Outcome>, String> {
     if params.is_empty() {
         let r = conn.query_iter(sql).await.map_err(client::err)?;
-        drain(r).await.map_err(client::err)
+        drain(r, false).await.map_err(client::err)
     } else {
         let values: Vec<Value> = params.iter().map(|s| Value::Bytes(s.clone().into_bytes())).collect();
         let r = conn.exec_iter(sql, values).await.map_err(client::err)?;
-        drain(r).await.map_err(client::err)
+        drain(r, false).await.map_err(client::err)
     }
+}
+
+/// `statement` for a grid: long cells cut (`format::MAX_CELL`), at most `MAX_BYTES` of rows.
+pub async fn statement_cut(conn: &mut Conn, sql: &str) -> Result<Vec<Outcome>, String> {
+    let r = conn.query_iter(sql).await.map_err(client::err)?;
+    drain(r, true).await.map_err(client::err)
 }
 
 /// A query the SQL console doesn't show; its first result set.
@@ -100,6 +131,13 @@ impl Session {
         Ok(Session { conn: client::conn().await?, shown: Vec::new(), started: Instant::now() })
     }
 
+    /// A session for changes, in `STRICT` mode (the SET is not shown in the console).
+    pub async fn strict() -> Result<Self, String> {
+        let mut s = Self::open().await?;
+        statement(&mut s.conn, STRICT, &[]).await?;
+        Ok(s)
+    }
+
     pub async fn run(&mut self, q: &Built) -> Result<Vec<Outcome>, String> {
         self.shown.push(q.display.trim_end_matches(';').to_string());
         statement(&mut self.conn, &q.sql, &q.params).await
@@ -107,6 +145,26 @@ impl Session {
 
     pub async fn text(&mut self, sql: &str) -> Result<Vec<Outcome>, String> {
         self.run(&Built { sql: sql.to_string(), params: Vec::new(), display: sql.to_string() }).await
+    }
+
+    /// `text` for a grid: long cells cut (see `statement_cut`).
+    pub async fn grid(&mut self, sql: &str) -> Result<Vec<Outcome>, String> {
+        self.shown.push(sql.trim_end_matches(';').to_string());
+        statement_cut(&mut self.conn, sql).await
+    }
+
+    /// Fails as running `sql` would unless it is exactly one valid statement: the server parses it as a
+    /// prepared statement, which can't hold a second one. So text pasted into `sql` (the Data tab's
+    /// filter) can't add a statement, whatever the session's sql_mode does to quotes and backslashes.
+    pub async fn single(&mut self, sql: &str) -> Result<(), String> {
+        let r = match self.conn.prep(sql).await {
+            Ok(stmt) => self.conn.close(stmt).await,
+            Err(e) => Err(e),
+        };
+        if r.is_err() {
+            self.shown.push(sql.trim_end_matches(';').to_string());
+        }
+        r.map_err(client::err)
     }
 
     /// Sends the console line: every statement run, and the error if the last one failed.

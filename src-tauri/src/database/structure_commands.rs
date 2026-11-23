@@ -10,23 +10,29 @@ use crate::database::commands::data::run::{self, Session};
 use structure::load::{self, TableStructure};
 use structure::sql::{self, Choices, ColumnDraft, ForeignKeyDraft, IndexKind, NameCheck, Position};
 
-/// `literal()` escapes with backslashes: under NO_BACKSLASH_ESCAPES a comment or default with `\` would be
-/// stored differently than typed. The pool resets the session when the connection goes back.
-const BACKSLASH_ESCAPES: &str = "SET SESSION sql_mode = REPLACE(@@sql_mode, 'NO_BACKSLASH_ESCAPES', '')";
-
-/// Runs the statements of one change on one connection, as one console line.
-async fn change(statements: &[String]) -> Result<(), String> {
-    let mut s = Session::open().await?;
-    run::statement(&mut s.conn, BACKSLASH_ESCAPES, &[]).await?;
+/// Runs the statements of one change on one connection in strict mode (`run::STRICT`: a value that
+/// doesn't fit the new definition fails instead of being cut or zeroed), as one console line.
+/// Returns how many statements succeeded, and the first error.
+async fn run_all(statements: &[String]) -> (usize, Result<(), String>) {
+    let mut s = match Session::strict().await {
+        Ok(s) => s,
+        Err(e) => return (0, Err(e)),
+    };
+    let mut done = 0;
     let mut result = Ok(());
     for q in statements {
         if let Err(e) = s.text(q).await {
             result = Err(e);
             break;
         }
+        done += 1;
     }
     s.log(result.as_ref().err());
-    result
+    (done, result)
+}
+
+async fn change(statements: &[String]) -> Result<(), String> {
+    run_all(statements).await.1
 }
 
 /// Everything the Structure tab shows about a table or view.
@@ -36,10 +42,11 @@ pub async fn db_structure_load(database: String, table: String) -> Result<TableS
     let p = [database, table];
     let status = run::quiet(load::STATUS, &p).await?;
     let columns = run::quiet(&format!("SHOW FULL COLUMNS FROM {fq}"), &[]).await?;
+    let extras = run::quiet(load::COLUMN_EXTRAS, &p).await?;
     let indexes = run::quiet(&format!("SHOW INDEX FROM {fq}"), &[]).await?;
     let create = run::quiet(&format!("SHOW CREATE TABLE {fq}"), &[]).await?;
     let foreign_keys = run::quiet(load::FOREIGN_KEYS, &p).await?;
-    Ok(load::structure(&status, &columns, &indexes, &create, &foreign_keys))
+    Ok(load::structure(&status, &columns, &extras, &indexes, &create, &foreign_keys))
 }
 
 /// The column names of a table (Add Foreign Key's "Refers to" column).
@@ -115,10 +122,17 @@ pub async fn db_structure_rename_table(database: String, table: String, new_data
 }
 
 /// Copies the table in its database (structure and indexes, and the rows when `with_data`);
-/// resolves to the message for the "Done" alert.
+/// resolves to the message for the "Done" alert. A copy that couldn't be filled is removed again.
 #[tauri::command]
 pub async fn db_structure_copy_table(database: String, table: String, new_name: String, with_data: bool) -> Result<String, String> {
-    change(&sql::copy_table(&database, &table, &new_name, with_data)?).await?;
+    let data = if with_data { Some(load::copied_columns(&run::quiet(load::COLUMN_EXTRAS, &[database.clone(), table.clone()]).await?)) } else { None };
+    let statements = sql::copy_table(&database, &table, &new_name, data.as_deref())?;
+    let (done, result) = run_all(&statements).await;
+    if result.is_err() && done > 0 {
+        // The new table exists (CREATE ran) but its rows didn't arrive.
+        let _ = change(&[sql::drop_copy(&database, &new_name)]).await;
+    }
+    result?;
     Ok(format!("Copied to “{}”.", new_name.trim()))
 }
 

@@ -86,6 +86,11 @@ impl Built {
             }
         }
     }
+
+    /// Text `s` as character set `cs`, compared byte by byte: no case or accent folding, trailing spaces count.
+    fn exact(&mut self, s: &str, cs: &str) -> &mut Self {
+        self.raw("CONVERT(").value(Some(s), false).raw(&format!(" USING {cs}) COLLATE {cs}_nopad_bin"))
+    }
 }
 
 /// A string literal as the console and "Copy Row as INSERT" write it: `'` doubled, `\` escaped.
@@ -98,12 +103,19 @@ pub fn is_hex(s: &str) -> bool {
     s.len() > 2 && s.len() % 2 == 0 && (s.starts_with("0x") || s.starts_with("0X")) && s[2..].bytes().all(|c| c.is_ascii_hexdigit())
 }
 
-/// The page query and the row count, sent together (the console shows them as one line).
-/// `filter` is the user's WHERE condition; it must be a single condition.
-pub fn page(db: &str, table: &str, filter: &str, order: Option<(&str, bool)>, offset: u64) -> Result<String, String> {
+/// The page query and the row count: two statements, run one by one (the console shows them as one line).
+/// `filter` is the user's WHERE condition and must be a single condition (`db_page` also lets the server
+/// check that). `tiebreak`: key columns after the sort column, so equal values keep one order and no row
+/// repeats or goes missing between pages.
+pub fn page(db: &str, table: &str, filter: &str, order: Option<(&str, bool)>, tiebreak: &[String], offset: u64) -> Result<(String, String), String> {
     let filter = filter.trim().trim_end_matches(|c: char| c == ';' || c.is_whitespace());
-    if split(filter).len() > 1 {
+    // Read both ways a server may: with backslash escapes, and under NO_BACKSLASH_ESCAPES (`\` an ordinary byte).
+    let plain = filter.replace('\\', "x");
+    if split(filter).len() > 1 || split(&plain).len() > 1 {
         return Err("The filter must be a single condition. Remove the “;” from it.".into());
+    }
+    if !super::marks::syntax_marks(filter).is_empty() || !super::marks::syntax_marks(&plain).is_empty() {
+        return Err("The filter has an unclosed quote or parenthesis (write '' for a quote inside text).".into());
     }
     let fq = qualified(db, table);
     let cond = match filter {
@@ -112,40 +124,80 @@ pub fn page(db: &str, table: &str, filter: &str, order: Option<(&str, bool)>, of
         f if f.contains("--") || f.contains('#') || f.contains("/*") => format!(" WHERE {f}\n"),
         f => format!(" WHERE {f}"),
     };
-    let order = order.map(|(c, asc)| format!(" ORDER BY {} {}", ident(c), if asc { "ASC" } else { "DESC" })).unwrap_or_default();
-    Ok(format!("SELECT * FROM {fq}{cond}{order} LIMIT {PAGE_SIZE} OFFSET {offset}; SELECT COUNT(*) FROM {fq}{cond};"))
+    let order = order
+        .map(|(c, asc)| {
+            let dir = if asc { "ASC" } else { "DESC" };
+            let keys = std::iter::once(c).chain(tiebreak.iter().map(String::as_str).filter(|k| *k != c));
+            format!(" ORDER BY {}", keys.map(|k| format!("{} {dir}", ident(k))).collect::<Vec<_>>().join(", "))
+        })
+        .unwrap_or_default();
+    Ok((format!("SELECT * FROM {fq}{cond}{order} LIMIT {PAGE_SIZE} OFFSET {offset}"), format!("SELECT COUNT(*) FROM {fq}{cond}")))
 }
 
-/// The columns that find a row again: the primary key, else a UNIQUE NOT NULL column, else every column.
-/// Indexes into `names`, the grid's columns (whose order the row values follow).
-pub fn key_columns(info: &[ColumnInfo], names: &[String]) -> Vec<usize> {
+/// Columns that make a sort order unique: the primary key, else the UNIQUE ones (table order).
+pub fn tiebreak(info: &[ColumnInfo]) -> Vec<String> {
+    let of = |key: &str| info.iter().filter(|c| c.key == key).map(|c| c.name.clone()).collect::<Vec<_>>();
+    let pk = of("PRI");
+    if pk.is_empty() { of("UNI") } else { pk }
+}
+
+/// The columns that find a row again: the primary key, else a UNIQUE NOT NULL column; None: every
+/// column must be compared. Indexes into `names`, the grid's columns (whose order the row values follow).
+pub fn row_key(info: &[ColumnInfo], names: &[String]) -> Option<Vec<usize>> {
     let pos = |name: &str| names.iter().position(|c| c == name);
     let pk: Vec<Option<usize>> = info.iter().filter(|c| c.key == "PRI").map(|c| pos(&c.name)).collect();
     if !pk.is_empty() && pk.iter().all(Option::is_some) {
-        return pk.into_iter().flatten().collect();
+        return Some(pk.into_iter().flatten().collect());
     }
-    if let Some(i) = info.iter().filter(|c| c.key == "UNI" && !c.nullable).find_map(|c| pos(&c.name)) {
-        return vec![i];
-    }
-    (0..names.len()).collect()
+    info.iter().filter(|c| c.key == "UNI" && !c.nullable).find_map(|c| pos(&c.name)).map(|i| vec![i])
+}
+
+/// `row_key`, or every column.
+pub fn key_columns(info: &[ColumnInfo], names: &[String]) -> Vec<usize> {
+    row_key(info, names).unwrap_or_else(|| (0..names.len()).collect())
 }
 
 fn is_binary(info: &[ColumnInfo], name: &str) -> bool {
     info.iter().any(|c| c.name == name && (c.binary || c.family == "spatial"))
 }
 
-/// `WHERE` for one row, NULL-safe (`<=>`).
+/// The character set of a text column (from its collation: `latin1_swedish_ci` → `latin1`).
+fn text_charset<'a>(info: &'a [ColumnInfo], name: &str) -> Option<&'a str> {
+    let c = info.iter().find(|c| c.name == name && !c.binary && c.family != "spatial")?;
+    let cs = c.collation.split('_').next()?;
+    (!cs.is_empty() && cs.bytes().all(|b| b.is_ascii_alphanumeric())).then_some(cs)
+}
+
+/// `WHERE` for one row, NULL-safe (`<=>`). Without a key every column is compared, and text exactly:
+/// under an `_ai_ci` collation `php` = `PHP` and `kor` = `kör`, and trailing spaces don't count, so the
+/// plain comparison could change or delete another row.
 fn match_row(q: &mut Built, info: &[ColumnInfo], names: &[String], row: &[Option<String>]) -> Result<(), String> {
     if row.len() != names.len() || names.is_empty() {
         return Err("The row doesn't match the table's columns. Reload the rows and try again.".into());
     }
-    for (n, i) in key_columns(info, names).into_iter().enumerate() {
+    let key = row_key(info, names);
+    for (n, i) in key.clone().unwrap_or_else(|| (0..names.len()).collect()).into_iter().enumerate() {
         if n > 0 {
             q.raw(" AND ");
         }
-        q.raw(&ident(&names[i])).raw(" <=> ").value(row[i].as_deref(), is_binary(info, &names[i]));
+        let name = &names[i];
+        q.raw(&ident(name)).raw(" <=> ");
+        match (row[i].as_deref(), key.is_none().then(|| text_charset(info, name)).flatten()) {
+            (Some(v), Some(cs)) => q.exact(v, cs),
+            (v, _) => q.value(v, is_binary(info, name)),
+        };
     }
     Ok(())
+}
+
+/// One whole value of a row (the grid gets long values cut; the inspector loads them so).
+pub fn select_cell(db: &str, table: &str, info: &[ColumnInfo], names: &[String], row: &[Option<String>], column: usize) -> Result<Built, String> {
+    let name = names.get(column).ok_or("Unknown column.")?;
+    let mut q = Built::default();
+    q.raw(&format!("SELECT {} FROM {} WHERE ", ident(name), qualified(db, table)));
+    match_row(&mut q, info, names, row)?;
+    q.raw(" LIMIT 1");
+    Ok(q)
 }
 
 /// `SELECT COUNT(*)` of the rows matching `row`: run before a change, so 0 is reported instead of a
@@ -234,27 +286,87 @@ mod tests {
         v.iter().map(|o| o.map(str::to_string)).collect()
     }
 
+    fn pair(a: &str, b: &str) -> (String, String) {
+        (a.to_string(), b.to_string())
+    }
+
     #[test]
     fn page_query_as_the_console_shows_it() {
         assert_eq!(
-            page("lampion_demo", "customers", "", None, 0).unwrap(),
-            "SELECT * FROM `lampion_demo`.`customers` LIMIT 500 OFFSET 0; SELECT COUNT(*) FROM `lampion_demo`.`customers`;"
+            page("lampion_demo", "customers", "", None, &[], 0).unwrap(),
+            pair("SELECT * FROM `lampion_demo`.`customers` LIMIT 500 OFFSET 0", "SELECT COUNT(*) FROM `lampion_demo`.`customers`")
         );
         assert_eq!(
-            page("lampion_demo", "customers", " city = 'Budapest' ", Some(("name", false)), 500).unwrap(),
-            "SELECT * FROM `lampion_demo`.`customers` WHERE city = 'Budapest' ORDER BY `name` DESC LIMIT 500 OFFSET 500; \
-             SELECT COUNT(*) FROM `lampion_demo`.`customers` WHERE city = 'Budapest';"
+            page("lampion_demo", "customers", " city = 'Budapest' ", Some(("name", false)), &[], 500).unwrap(),
+            pair(
+                "SELECT * FROM `lampion_demo`.`customers` WHERE city = 'Budapest' ORDER BY `name` DESC LIMIT 500 OFFSET 500",
+                "SELECT COUNT(*) FROM `lampion_demo`.`customers` WHERE city = 'Budapest'"
+            )
         );
     }
 
     #[test]
+    fn sorting_by_a_non_unique_column_breaks_ties_by_the_key() {
+        let keys = names(&["id"]);
+        assert_eq!(page("d", "t", "", Some(("city", true)), &keys, 500).unwrap().0, "SELECT * FROM `d`.`t` ORDER BY `city` ASC, `id` ASC LIMIT 500 OFFSET 500");
+        assert_eq!(page("d", "t", "", Some(("city", false)), &keys, 0).unwrap().0, "SELECT * FROM `d`.`t` ORDER BY `city` DESC, `id` DESC LIMIT 500 OFFSET 0");
+        // The key itself needs no second copy.
+        assert_eq!(page("d", "t", "", Some(("id", true)), &keys, 0).unwrap().0, "SELECT * FROM `d`.`t` ORDER BY `id` ASC LIMIT 500 OFFSET 0");
+        let pk = [col("a", "int", "NO", "PRI"), col("email", "varchar(9)", "NO", "UNI"), col("b", "int", "NO", "PRI")];
+        assert_eq!(tiebreak(&pk), ["a", "b"]);
+        let unique = [col("x", "int", "YES", ""), col("email", "varchar(9)", "YES", "UNI"), col("code", "char(3)", "NO", "UNI")];
+        assert_eq!(tiebreak(&unique), ["email", "code"]);
+        assert!(tiebreak(&[col("x", "int", "YES", "MUL")]).is_empty());
+    }
+
+    #[test]
     fn filter_is_one_condition() {
-        assert!(page("d", "t", "1=1; DROP TABLE x", None, 0).is_err());
-        assert!(page("d", "t", "name = 'a;b'", None, 0).is_ok());
+        assert!(page("d", "t", "1=1; DROP TABLE x", None, &[], 0).is_err());
+        assert!(page("d", "t", "name = 'a;b'", None, &[], 0).is_ok());
         // A trailing semicolon is a habit, not a second statement.
-        assert_eq!(page("d", "t", "id = 1;", None, 0).unwrap(), "SELECT * FROM `d`.`t` WHERE id = 1 LIMIT 500 OFFSET 0; SELECT COUNT(*) FROM `d`.`t` WHERE id = 1;");
+        assert_eq!(page("d", "t", "id = 1;", None, &[], 0).unwrap(), pair("SELECT * FROM `d`.`t` WHERE id = 1 LIMIT 500 OFFSET 0", "SELECT COUNT(*) FROM `d`.`t` WHERE id = 1"));
         // A comment ends at a line break instead of hiding LIMIT.
-        assert!(page("d", "t", "id = 1 -- note", None, 0).unwrap().contains("-- note\n LIMIT 500"));
+        assert!(page("d", "t", "id = 1 -- note", None, &[], 0).unwrap().0.contains("-- note\n LIMIT 500"));
+        // An unclosed quote is refused: where it ends depends on the server's backslash mode.
+        assert!(page("d", "t", r"name = 'a\'; DROP TABLE x; -- '", None, &[], 0).is_err());
+        assert!(page("d", "t", "name = 'open", None, &[], 0).is_err());
+        assert!(page("d", "t", "(a = 1", None, &[], 0).is_err());
+        // Read the same either way: allowed.
+        assert!(page("d", "t", r"path = 'C:\\www' AND name = 'it''s'", None, &[], 0).is_ok());
+    }
+
+    #[test]
+    fn keyless_rows_compare_text_exactly_in_its_character_set() {
+        // `php` = `PHP` and `kor` = `kör` under an _ai_ci collation: without a key, text must match byte by byte.
+        let info = [
+            ColumnInfo::new("name", "varchar(20)", "YES", "", None, "", "", "utf8mb4_uca1400_ai_ci"),
+            ColumnInfo::new("city", "varchar(20)", "NO", "", None, "", "", "latin1_swedish_ci"),
+            ColumnInfo::new("n", "int", "YES", "", None, "", "", ""),
+            ColumnInfo::new("raw", "varbinary(4)", "YES", "", None, "", "", ""),
+        ];
+        let n = names(&["name", "city", "n", "raw"]);
+        let q = update_row("d", "t", &info, &n, &row(&[Some("php"), Some("Kör "), Some("1"), Some("0x00")]), &[(2, Some("2".into()))]).unwrap();
+        assert_eq!(
+            q.display,
+            "UPDATE `d`.`t` SET `n` = '2' WHERE `name` <=> CONVERT('php' USING utf8mb4) COLLATE utf8mb4_nopad_bin \
+             AND `city` <=> CONVERT('Kör ' USING latin1) COLLATE latin1_nopad_bin AND `n` <=> '1' AND `raw` <=> 0x00 LIMIT 1"
+        );
+        assert_eq!(q.params, ["2", "php", "Kör ", "1"]);
+        // NULL stays a NULL-safe NULL; the count matches the same way.
+        let c = count_row("d", "t", &info, &n, &row(&[None, Some("x"), None, None])).unwrap();
+        assert_eq!(c.sql, "SELECT COUNT(*) FROM `d`.`t` WHERE `name` <=> NULL AND `city` <=> CONVERT(? USING latin1) COLLATE latin1_nopad_bin AND `n` <=> NULL AND `raw` <=> NULL");
+        // A key is unique under its own collation: compared plainly, so its index is used.
+        let keyed = [ColumnInfo::new("code", "varchar(9)", "NO", "PRI", None, "", "", "utf8mb4_general_ci"), info[0].clone()];
+        let d = delete_row("d", "t", &keyed, &names(&["code", "name"]), &row(&[Some("A1"), Some("x")])).unwrap();
+        assert_eq!(d.display, "DELETE FROM `d`.`t` WHERE `code` <=> 'A1' LIMIT 1");
+    }
+
+    #[test]
+    fn whole_value_of_one_cell() {
+        let info = [col("id", "int", "NO", "PRI"), col("body", "longtext", "YES", "")];
+        let q = select_cell("d", "t", &info, &names(&["id", "body"]), &row(&[Some("7"), Some("cut…")]), 1).unwrap();
+        assert_eq!(q.display, "SELECT `body` FROM `d`.`t` WHERE `id` <=> '7' LIMIT 1");
+        assert!(select_cell("d", "t", &info, &names(&["id", "body"]), &row(&[Some("7"), None]), 5).is_err());
     }
 
     #[test]
@@ -269,6 +381,8 @@ mod tests {
         assert_eq!(key_columns(&nullable, &n), [0, 1, 2]);
         let composite = [col("a", "int", "NO", "PRI"), col("b", "int", "NO", "PRI")];
         assert_eq!(key_columns(&composite, &names(&["b", "a"])), [1, 0]);
+        assert_eq!(row_key(&nullable, &n), None);
+        assert_eq!(row_key(&unique, &n), Some(vec![1]));
     }
 
     #[test]

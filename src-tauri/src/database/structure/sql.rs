@@ -3,6 +3,7 @@
 //! operations go into the SQL as bare words, so they are checked here first.
 
 use crate::database::client::{ident, literal, qualified};
+use crate::database::commands::data::format::family;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -132,19 +133,53 @@ static FUNCTION: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(?i)^(current_timestamp|now|localtimestamp|current_date|curdate|current_time|curtime|uuid)(\(\d*\))?$").unwrap()
 });
 
-/// The text typed into a "Default" field as SQL, or None for no default: NULL, TRUE/FALSE, numbers,
-/// quoted text and the time/uuid functions are used as written; anything else is quoted.
-pub fn default_clause(text: &str) -> Option<String> {
+/// The base type, lowercase: `VARCHAR(20) BINARY` → `varchar`.
+fn base_type(sql_type: &str) -> String {
+    let t = sql_type.trim().to_ascii_lowercase();
+    t.split(|c: char| c == '(' || c.is_whitespace()).next().unwrap_or("").to_string()
+}
+
+/// Types whose values are strings: a number typed as their default means that text (`007` stays `'007'`).
+fn holds_text(sql_type: &str) -> bool {
+    matches!(family(sql_type), "text" | "enumSet" | "binary")
+}
+
+/// The text typed into a "Default" field as SQL, or None for no default: NULL, TRUE/FALSE, quoted text,
+/// an expression in parentheses and the time/uuid functions are used as written, numbers too unless the
+/// column holds text; anything else is quoted.
+pub fn default_clause(text: &str, sql_type: &str) -> Option<String> {
     let t = text.trim();
     if t.is_empty() {
         return None;
     }
     let keyword = ["NULL", "TRUE", "FALSE"].contains(&t.to_ascii_uppercase().as_str());
     let quoted = t.len() >= 2 && t.starts_with('\'') && t.ends_with('\'');
-    if keyword || quoted || NUMBER.is_match(t) || FUNCTION.is_match(t) {
+    let expression = t.len() >= 2 && t.starts_with('(') && t.ends_with(')');
+    let number = NUMBER.is_match(t) && !holds_text(sql_type);
+    if keyword || quoted || expression || number || FUNCTION.is_match(t) {
         Some(t.to_string())
     } else {
         Some(literal(t))
+    }
+}
+
+/// A column's default as information_schema.COLUMNS writes it (SQL: literals quoted, `NULL` for none),
+/// put the way the Default field holds it, so saving the column unchanged keeps the default exactly.
+pub fn sheet_default(column_default: Option<&str>, sql_type: &str) -> String {
+    match column_default.map(str::trim) {
+        None | Some("NULL") | Some("") => String::new(),
+        Some(v) if default_clause(v, sql_type).as_deref() == Some(v) => v.to_string(),
+        Some(v) => format!("({v})"),
+    }
+}
+
+/// `ON UPDATE CURRENT_TIMESTAMP` with the column's fractional seconds (MariaDB requires at least those).
+fn on_update(sql_type: &str) -> String {
+    let t = sql_type.trim().to_ascii_lowercase();
+    let digits = ["timestamp(", "datetime("].iter().find_map(|p| t.strip_prefix(*p)).map(|r| r.chars().take_while(char::is_ascii_digit).collect::<String>());
+    match digits.filter(|d| !d.is_empty() && d != "0") {
+        Some(d) => format!("ON UPDATE CURRENT_TIMESTAMP({d})"),
+        None => "ON UPDATE CURRENT_TIMESTAMP".into(),
     }
 }
 
@@ -161,22 +196,40 @@ pub struct ColumnDraft {
     pub auto_increment: bool,
     /// New Table only: the column is part of the primary key.
     pub primary_key: bool,
-    /// ON UPDATE CURRENT_TIMESTAMP.
+    /// ON UPDATE CURRENT_TIMESTAMP (with the type's precision).
     pub on_update_timestamp: bool,
     pub comment: String,
+    /// Edit Column keeps what the sheet doesn't show: the column's collation (with its character set;
+    /// written for text types only, so a new type without one drops it)…
+    pub collation: String,
+    /// …and INVISIBLE (left out of `SELECT *`).
+    pub invisible: bool,
 }
 
 impl ColumnDraft {
+    /// The collation clause, unless the type doesn't take one or already names one.
+    fn collation_clause(&self) -> Option<String> {
+        let t = self.sql_type.to_ascii_lowercase();
+        let text = matches!(base_type(&t).as_str(), "char" | "varchar" | "tinytext" | "text" | "mediumtext" | "longtext" | "enum" | "set");
+        let named = t.contains("collate") || t.contains("character set") || t.contains("charset");
+        (text && !named && PLAIN.is_match(&self.collation)).then(|| format!("CHARACTER SET {} COLLATE {}", charset(&self.collation), self.collation))
+    }
+
     /// Everything after the column name in a column definition.
     pub fn definition(&self) -> String {
-        let mut parts = vec![self.sql_type.trim().to_string(), (if self.nullable { "NULL" } else { "NOT NULL" }).to_string()];
+        let mut parts = vec![self.sql_type.trim().to_string()];
+        parts.extend(self.collation_clause());
+        parts.push((if self.nullable { "NULL" } else { "NOT NULL" }).to_string());
         if self.auto_increment {
             parts.push("AUTO_INCREMENT".into());
-        } else if let Some(d) = default_clause(&self.default_text) {
+        } else if let Some(d) = default_clause(&self.default_text, &self.sql_type) {
             parts.push(format!("DEFAULT {d}"));
         }
         if self.on_update_timestamp {
-            parts.push("ON UPDATE CURRENT_TIMESTAMP".into());
+            parts.push(on_update(&self.sql_type));
+        }
+        if self.invisible {
+            parts.push("INVISIBLE".into());
         }
         if !self.comment.is_empty() {
             parts.push(format!("COMMENT {}", literal(&self.comment)));
@@ -206,6 +259,9 @@ pub fn save_column(db: &str, table: &str, column: &ColumnDraft, replacing: Optio
     let Some(definition) = column.sql() else {
         return Err("The column needs a name and a type.".into());
     };
+    if !column.collation.is_empty() {
+        word(&column.collation, "collation")?;
+    }
     let what = match replacing {
         Some(old) => format!("CHANGE COLUMN {} ", ident(old)),
         None => "ADD COLUMN ".into(),
@@ -308,16 +364,23 @@ pub fn rename_table(db: &str, table: &str, new_db: &str, new_name: &str) -> Resu
     Ok(format!("RENAME TABLE {} TO {}", qualified(db, table), qualified(new_db, &name)))
 }
 
-/// A copy in the same database: structure and indexes, and the rows when `with_data`.
-pub fn copy_table(db: &str, table: &str, new_name: &str, with_data: bool) -> Result<Vec<String>, String> {
+/// A copy in the same database: structure and indexes, and the rows when `data` lists the columns to copy
+/// (by name: `SELECT *` would leave INVISIBLE columns out, and generated ones can't be written).
+pub fn copy_table(db: &str, table: &str, new_name: &str, data: Option<&[String]>) -> Result<Vec<String>, String> {
     let name = valid_name(new_name, "Table", &[])?;
     let target = qualified(db, &name);
     let source = qualified(db, table);
     let mut out = vec![format!("CREATE TABLE {target} LIKE {source}")];
-    if with_data {
-        out.push(format!("INSERT INTO {target} SELECT * FROM {source}"));
+    if let Some(columns) = data.filter(|c| !c.is_empty()) {
+        let list = columns.iter().map(|c| ident(c)).collect::<Vec<_>>().join(", ");
+        out.push(format!("INSERT INTO {target} ({list}) SELECT {list} FROM {source}"));
     }
     Ok(out)
+}
+
+/// Removes the copy `copy_table` made when filling it failed.
+pub fn drop_copy(db: &str, new_name: &str) -> String {
+    format!("DROP TABLE {}", qualified(db, new_name.trim()))
 }
 
 /// A new engine and/or collation (the data is converted to the collation's character set); None: nothing to change.
@@ -406,20 +469,80 @@ mod tests {
 
     #[test]
     fn defaults_are_quoted_only_when_they_are_text() {
-        assert_eq!(default_clause(""), None);
-        assert_eq!(default_clause("   "), None);
-        for asis in ["NULL", "null", "TRUE", "false", "0", "-1", "0.00", "+3.5", ".5", "1e3", "'x'", "''", "CURRENT_TIMESTAMP", "current_timestamp()", "now()", "CURRENT_TIMESTAMP(3)", "curdate", "uuid()"] {
-            assert_eq!(default_clause(asis).as_deref(), Some(asis), "{asis}");
+        let d = |t: &str| default_clause(t, "INT");
+        assert_eq!(d(""), None);
+        assert_eq!(d("   "), None);
+        for asis in ["NULL", "null", "TRUE", "false", "0", "-1", "0.00", "+3.5", ".5", "1e3", "'x'", "''", "CURRENT_TIMESTAMP", "current_timestamp()", "now()", "CURRENT_TIMESTAMP(3)", "curdate", "uuid()", "(1 + 1)"] {
+            assert_eq!(d(asis).as_deref(), Some(asis), "{asis}");
         }
-        assert_eq!(default_clause(" 42 ").as_deref(), Some("42"));
-        assert_eq!(default_clause("new").as_deref(), Some("'new'"));
-        assert_eq!(default_clause("it's").as_deref(), Some(r"'it\'s'"));
-        assert_eq!(default_clause(r"C:\www").as_deref(), Some(r"'C:\\www'"));
+        assert_eq!(d(" 42 ").as_deref(), Some("42"));
+        assert_eq!(d("new").as_deref(), Some("'new'"));
+        assert_eq!(d("it's").as_deref(), Some(r"'it\'s'"));
+        assert_eq!(d(r"C:\www").as_deref(), Some(r"'C:\\www'"));
         // Not numbers, not functions: quoted (a bare `inf` or `now(x)` would be invalid SQL).
-        assert_eq!(default_clause("inf").as_deref(), Some("'inf'"));
-        assert_eq!(default_clause("1.2.3").as_deref(), Some("'1.2.3'"));
-        assert_eq!(default_clause("now(x)").as_deref(), Some("'now(x)'"));
-        assert_eq!(default_clause("'").as_deref(), Some(r"'\''"));
+        assert_eq!(d("inf").as_deref(), Some("'inf'"));
+        assert_eq!(d("1.2.3").as_deref(), Some("'1.2.3'"));
+        assert_eq!(d("now(x)").as_deref(), Some("'now(x)'"));
+        assert_eq!(d("'").as_deref(), Some(r"'\''"));
+        // A number for a text column is that text: 007 would be stored as '7'.
+        for ty in ["VARCHAR(10)", "char(3)", "TEXT", "enum('1','2')", "varbinary(4)"] {
+            assert_eq!(default_clause("007", ty).as_deref(), Some("'007'"), "{ty}");
+        }
+        assert_eq!(default_clause("1.50", "decimal(5,2)").as_deref(), Some("1.50"));
+    }
+
+    #[test]
+    fn edit_column_keeps_the_default_exactly() {
+        // information_schema.COLUMNS quotes text defaults; the sheet gets them so they save unchanged.
+        let cases = [
+            (Some("'NULL'"), "varchar(10)", "'NULL'"), // the text NULL, not SQL NULL
+            (Some("'007'"), "varchar(10)", "'007'"),
+            (Some("NULL"), "varchar(10)", ""),
+            (None, "int(11)", ""),
+            (Some("0"), "int(11)", "0"),
+            (Some("''"), "text", "''"),
+            (Some(r"'it\'s'"), "varchar(9)", r"'it\'s'"),
+            (Some("current_timestamp(3)"), "timestamp(3)", "current_timestamp(3)"),
+            (Some("b'101'"), "bit(3)", "(b'101')"),
+            (Some("concat('a','b')"), "varchar(9)", "(concat('a','b'))"),
+        ];
+        for (from, ty, want) in cases {
+            let text = sheet_default(from, ty);
+            assert_eq!(text, want, "{from:?}");
+            // Saved unchanged, the field goes into the SQL as it is.
+            assert_eq!(default_clause(&text, ty), (!text.is_empty()).then(|| text.clone()), "{from:?}");
+        }
+    }
+
+    #[test]
+    fn edit_column_keeps_collation_invisible_and_update_precision() {
+        let mut c = draft("name", "varchar(20)");
+        c.collation = "latin1_swedish_ci".into();
+        c.invisible = true;
+        assert_eq!(c.definition(), "varchar(20) CHARACTER SET latin1 COLLATE latin1_swedish_ci NULL INVISIBLE");
+        // A type without a collation drops it; a type that names its own keeps that one.
+        c.sql_type = "INT".into();
+        assert_eq!(c.definition(), "INT NULL INVISIBLE");
+        c.sql_type = "VARCHAR(5) COLLATE utf8mb4_bin".into();
+        assert_eq!(c.definition(), "VARCHAR(5) COLLATE utf8mb4_bin NULL INVISIBLE");
+        c.sql_type = "enum('a','b')".into();
+        c.collation = "utf8mb4_bin".into();
+        c.invisible = false;
+        assert_eq!(c.definition(), "enum('a','b') CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL");
+        // The collation goes in unquoted: only plain words.
+        c.collation = "x; DROP".into();
+        assert_eq!(c.definition(), "enum('a','b') NULL");
+        assert!(save_column("d", "t", &c, Some("e"), &Position::Unchanged).is_err());
+
+        let mut t = draft("changed", "TIMESTAMP(3)");
+        t.nullable = false;
+        t.default_text = "current_timestamp(3)".into();
+        t.on_update_timestamp = true;
+        assert_eq!(t.definition(), "TIMESTAMP(3) NOT NULL DEFAULT current_timestamp(3) ON UPDATE CURRENT_TIMESTAMP(3)");
+        t.sql_type = "datetime(6)".into();
+        assert!(t.definition().ends_with("ON UPDATE CURRENT_TIMESTAMP(6)"));
+        t.sql_type = "timestamp".into();
+        assert!(t.definition().ends_with("ON UPDATE CURRENT_TIMESTAMP"));
     }
 
     #[test]
@@ -526,12 +649,15 @@ mod tests {
         assert!(rename_table("shop", "orders", "shop", "  ").is_err());
         assert!(rename_table("shop", "orders", "shop", "a.b").is_err());
         assert!(rename_table("shop", "orders", "", "x").is_err());
-        assert_eq!(copy_table("shop", "orders", "orders_copy", false).unwrap(), ["CREATE TABLE `shop`.`orders_copy` LIKE `shop`.`orders`"]);
+        assert_eq!(copy_table("shop", "orders", "orders_copy", None).unwrap(), ["CREATE TABLE `shop`.`orders_copy` LIKE `shop`.`orders`"]);
+        // The columns by name: an INVISIBLE one too, a generated one not (the caller leaves it out).
+        let cols = ["id".to_string(), "hidden".into()];
         assert_eq!(
-            copy_table("shop", "orders", "orders_copy", true).unwrap(),
-            ["CREATE TABLE `shop`.`orders_copy` LIKE `shop`.`orders`", "INSERT INTO `shop`.`orders_copy` SELECT * FROM `shop`.`orders`"]
+            copy_table("shop", "orders", " orders_copy ", Some(&cols)).unwrap(),
+            ["CREATE TABLE `shop`.`orders_copy` LIKE `shop`.`orders`", "INSERT INTO `shop`.`orders_copy` (`id`, `hidden`) SELECT `id`, `hidden` FROM `shop`.`orders`"]
         );
-        assert!(copy_table("shop", "orders", "", true).is_err());
+        assert!(copy_table("shop", "orders", "", Some(&cols)).is_err());
+        assert_eq!(drop_copy("shop", " orders_copy "), "DROP TABLE `shop`.`orders_copy`");
     }
 
     #[test]

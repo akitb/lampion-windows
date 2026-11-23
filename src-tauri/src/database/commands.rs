@@ -10,10 +10,12 @@ use crate::core::{activity, paths, shell};
 use crate::database::client;
 use data::run::{self, Session};
 use data::sql::{self, ColumnInfo};
-use data::{complete, format, history, marks, split};
+use data::{complete, format, history, import, marks, split};
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::process::Stdio;
+use std::sync::Mutex;
 use std::time::Instant;
 
 #[derive(Serialize)]
@@ -36,11 +38,17 @@ pub async fn db_connect() -> Result<ServerInfo, String> {
     Ok(ServerInfo { version, databases })
 }
 
-/// Uses `password` for root from now on (kept in memory only) and connects again.
+/// Uses `password` for root from now on and connects again. Once it works it is kept for the next launch,
+/// encrypted, as the MariaDB settings page keeps it (`config::secret`); never logged.
 #[tauri::command]
 pub async fn db_set_password(password: String) -> Result<ServerInfo, String> {
-    client::configure(client::port(), (!password.is_empty()).then_some(password));
-    db_connect().await
+    let password = (!password.is_empty()).then_some(password);
+    client::configure(client::port(), password.clone());
+    let info = db_connect().await?;
+    if let Err(e) = crate::config::secret::save(password.as_deref()) {
+        activity::warn("Database", &e);
+    }
+    Ok(info)
 }
 
 #[derive(Serialize)]
@@ -147,6 +155,8 @@ pub async fn db_columns(database: String, table: String) -> Result<Vec<ColumnInf
 pub struct Page {
     pub columns: Vec<String>,
     pub rows: Vec<Vec<Option<String>>>,
+    /// `[row, column]` of the values cut to `format::MAX_CELL` (`db_cell` loads one whole).
+    pub cut: Vec<[usize; 2]>,
     /// Rows matching the filter.
     pub total: Option<u64>,
 }
@@ -154,14 +164,22 @@ pub struct Page {
 /// One page (500 rows) of a table, filtered and sorted, and the number of matching rows.
 #[tauri::command]
 pub async fn db_page(database: String, table: String, filter: String, order_by: Option<String>, ascending: bool, offset: u64) -> Result<Page, String> {
-    let text = sql::page(&database, &table, &filter, order_by.as_deref().map(|c| (c, ascending)), offset)?;
+    let tiebreak = if order_by.is_some() { sql::tiebreak(&load_columns(&database, &table).await?) } else { Vec::new() };
+    let (page, count) = sql::page(&database, &table, &filter, order_by.as_deref().map(|c| (c, ascending)), &tiebreak, offset)?;
     let mut s = Session::open().await?;
-    let r = s.text(&text).await;
+    let r = async {
+        // The filter is pasted into both: the server must see each as one statement.
+        if !filter.trim().is_empty() {
+            s.single(&page).await?;
+            s.single(&count).await?;
+        }
+        Ok::<_, String>((s.grid(&page).await?, s.text(&count).await?))
+    }
+    .await;
     s.log(r.as_ref().err());
-    let mut grids = r?.into_iter().filter_map(|o| o.grid);
-    let page = grids.next().unwrap_or_default();
-    let total = grids.next().and_then(|g| g.rows.first()?.first()?.as_deref()?.parse().ok());
-    Ok(Page { columns: page.columns, rows: page.rows, total })
+    let (rows, total) = r?;
+    let grid = rows.into_iter().find_map(|o| o.grid).unwrap_or_default();
+    Ok(Page { columns: grid.columns, rows: grid.rows, cut: grid.cut, total: run::first_number(&total) })
 }
 
 #[derive(Deserialize)]
@@ -171,18 +189,20 @@ pub struct CellChange {
     pub value: Option<String>,
 }
 
-fn not_found(keyed: bool) -> String {
+/// `what` ("The change was not saved") and why the row wasn't found.
+fn not_found(keyed: bool, what: &str) -> String {
     if keyed {
-        "The change was not saved: the row is no longer in the table (it was changed or deleted elsewhere). Reload the rows and try again.".into()
+        format!("{what}: the row is no longer in the table (it was changed or deleted elsewhere). Reload the rows and try again.")
     } else {
-        "The change was not saved: Lampion could not find this row again. The table has no primary key, and some of its values \
-         (for example FLOAT numbers) can't be matched exactly. Add a primary key in Structure to edit rows safely."
-            .into()
+        format!(
+            "{what}: Lampion could not find this row again. The table has no primary key, and some of its values \
+             (for example FLOAT numbers or very long texts) can't be matched exactly. Add a primary key in Structure to edit rows safely."
+        )
     }
 }
 
 fn keyed(info: &[ColumnInfo], columns: &[String]) -> bool {
-    sql::key_columns(info, columns).len() < columns.len() || info.iter().any(|c| c.key == "PRI")
+    sql::row_key(info, columns).is_some()
 }
 
 /// Changes cells of one row. `row` holds the values as loaded (in `columns` order); the row is found
@@ -193,17 +213,33 @@ pub async fn db_update_row(database: String, table: String, columns: Vec<String>
     let changes: Vec<(usize, Option<String>)> = changes.into_iter().map(|c| (c.column, c.value)).collect();
     let count = sql::count_row(&database, &table, &info, &columns, &row)?;
     let update = sql::update_row(&database, &table, &info, &columns, &row, &changes)?;
-    let mut s = Session::open().await?;
+    let mut s = Session::strict().await?;
     let result = match s.run(&count).await {
         Ok(o) if run::first_number(&o) == Some(0) => {
             s.log(None);
-            return Err(not_found(keyed(&info, &columns)));
+            return Err(not_found(keyed(&info, &columns), "The change was not saved"));
         }
+        // More than one: rows equal in every column (no key), so changing any one of them is the same.
         Ok(_) => s.run(&update).await.map(|_| ()),
         Err(e) => Err(e),
     };
     s.log(result.as_ref().err());
     result
+}
+
+/// The whole value of one cell, which the grid got cut (see `Page::cut`); the row is found like an edit finds it.
+#[tauri::command]
+pub async fn db_cell(database: String, table: String, columns: Vec<String>, row: Vec<Option<String>>, column: usize) -> Result<Option<String>, String> {
+    let info = load_columns(&database, &table).await?;
+    let q = sql::select_cell(&database, &table, &info, &columns, &row, column)?;
+    let mut s = Session::open().await?;
+    let r = s.run(&q).await;
+    s.log(r.as_ref().err());
+    let found = r?.into_iter().find_map(|o| o.grid).and_then(|g| g.rows.into_iter().next());
+    match found {
+        Some(mut cells) if !cells.is_empty() => Ok(cells.swap_remove(0)),
+        _ => Err(not_found(keyed(&info, &columns), "The whole value could not be loaded")),
+    }
 }
 
 /// Adds a row; fields left out get their default value.
@@ -212,7 +248,7 @@ pub async fn db_insert_row(database: String, table: String, values: HashMap<Stri
     let info = load_columns(&database, &table).await?;
     let values: Vec<(String, String)> = values.into_iter().collect();
     let q = sql::insert_row(&database, &table, &info, &values);
-    let mut s = Session::open().await?;
+    let mut s = Session::strict().await?;
     let r = s.run(&q).await;
     s.log(r.as_ref().err());
     r.map(|_| ())
@@ -240,7 +276,7 @@ pub async fn db_delete_rows(database: String, table: String, columns: Vec<String
     result?;
     match missing {
         0 => Ok(()),
-        1 if statements.len() == 1 => Err(not_found(keyed(&info, &columns)).replace("change was not saved", "row was not deleted")),
+        1 if statements.len() == 1 => Err(not_found(keyed(&info, &columns), "The row was not deleted")),
         n => Err(format!("{n} of the {} rows were not deleted: Lampion could not find them again. Reload the rows and try again.", statements.len())),
     }
 }
@@ -279,15 +315,20 @@ pub struct QueryRun {
     /// Where the error points in the text (UTF-16 offsets, as the editor counts).
     pub error_from: Option<usize>,
     pub error_to: Option<usize>,
-    /// A result set had more rows than Lampion keeps (`run::MAX_ROWS`).
+    /// A result set had more rows than Lampion keeps (`run::MAX_ROWS` / `run::MAX_BYTES`).
     pub truncated: bool,
     pub seconds: f64,
     /// The history with this query first.
     pub history: Vec<String>,
 }
 
+/// The UTF-16 offset (as the editor counts) of byte offset `byte`; inside a character, of its start.
 fn utf16(text: &str, byte: usize) -> usize {
-    text[..byte].encode_utf16().count()
+    let mut b = byte.min(text.len());
+    while !text.is_char_boundary(b) {
+        b -= 1;
+    }
+    text[..b].encode_utf16().count()
 }
 
 /// Runs the Query tab's text: statement by statement on one connection (in `database` if given),
@@ -320,7 +361,7 @@ pub async fn db_run_query(database: Option<String>, text: String) -> Result<Quer
             break;
         }
         let stmt = &text[span.start..span.end];
-        match run::statement(&mut conn, stmt, &[]).await {
+        match run::statement_cut(&mut conn, stmt).await {
             Ok(outcomes) => {
                 for o in outcomes {
                     out.truncated |= o.truncated;
@@ -439,10 +480,11 @@ pub async fn db_export(database: String, table: Option<String>) -> Result<Option
     let started = Instant::now();
     let existed = std::path::Path::new(&path).exists();
     let mut cmd = tool(&exe, None);
-    cmd.args([format!("--result-file={path}"), "--routines".into()]);
+    cmd.arg(format!("--result-file={path}"));
+    // Routines belong to the database: a one-table export leaves them out.
     match &table {
         Some(t) => cmd.args([database.as_str(), t.as_str()]),
-        None => cmd.args(["--databases", database.as_str()]),
+        None => cmd.args(["--routines", "--databases", database.as_str()]),
     };
     let out = tauri::async_runtime::spawn_blocking(move || cmd.stdin(Stdio::null()).output()).await.map_err(|e| e.to_string())?;
     let label = format!("/* Export: {what} → {path} */");
@@ -468,17 +510,57 @@ pub async fn db_export(database: String, table: Option<String>) -> Result<Option
     }
 }
 
-/// Runs an SQL file the user picks, in `database` if given (else the file must choose one).
-/// `None`: cancelled.
+#[derive(Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportRun {
+    /// The file that ran; None: cancelled, or waiting for the user (`others`).
+    pub path: Option<String>,
+    /// The file's name.
+    pub file: String,
+    /// Databases the file switches to or creates besides the chosen one: it has not run, and runs on a
+    /// call with `confirmed` once the user agrees.
+    pub others: Vec<String>,
+}
+
+/// The file waiting for the user's yes, and the database it is to run in.
+static PENDING: Lazy<Mutex<Option<(String, Option<String>)>>> = Lazy::new(|| Mutex::new(None));
+
+fn file_name(path: &str) -> String {
+    std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string())
+}
+
+/// Runs an SQL file the user picks, in `database` if given (else the file must choose one). A file whose
+/// `USE x` / `CREATE DATABASE x` names another database (a whole-database export does) doesn't run yet:
+/// the answer lists those, and `confirmed` runs that same file after the user agreed.
 #[tauri::command]
-pub async fn db_import(database: Option<String>) -> Result<Option<String>, String> {
+pub async fn db_import(database: Option<String>, confirmed: Option<bool>) -> Result<ImportRun, String> {
     let exe = paths::mariadb_exe();
     if let Some(e) = missing(&exe) {
         return Err(e);
     }
-    let Some(path) = choose(Kind::OpenFile, "Import SQL File", ("SQL files", "*.sql"), None).await else { return Ok(None) };
+    let path = if confirmed == Some(true) {
+        match PENDING.lock().unwrap().take() {
+            Some((path, d)) if d == database => path,
+            _ => return Ok(ImportRun::default()),
+        }
+    } else {
+        let Some(path) = choose(Kind::OpenFile, "Import SQL File", ("SQL files", "*.sql"), None).await else { return Ok(ImportRun::default()) };
+        if let Some(target) = database.clone() {
+            let p = path.clone();
+            let named = tauri::async_runtime::spawn_blocking(move || std::fs::File::open(&p).map(|f| import::named_databases(std::io::BufReader::new(f))))
+                .await
+                .map_err(|e| e.to_string())?
+                .map_err(|e| format!("Can't open {path}: {e}"))?;
+            let others = import::others(named, &target);
+            if !others.is_empty() {
+                *PENDING.lock().unwrap() = Some((path.clone(), database));
+                return Ok(ImportRun { path: None, file: file_name(&path), others });
+            }
+        }
+        path
+    };
     let file = std::fs::File::open(&path).map_err(|e| format!("Can't open {path}: {e}"))?;
-    let name = std::path::Path::new(&path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.clone());
+    let name = file_name(&path);
     let label = format!("/* Import: {name}{} */", database.as_deref().map(|d| format!(" → {d}")).unwrap_or_default());
     let started = Instant::now();
     let mut cmd = tool(&exe, database.as_deref());
@@ -488,7 +570,7 @@ pub async fn db_import(database: Option<String>) -> Result<Option<String>, Strin
             client::log_sql(&label, None, started);
             client::log_sql("/* Import done */", None, started);
             activity::ok("Database", &format!("Imported {name}{}", database.as_deref().map(|d| format!(" into {d}")).unwrap_or_default()));
-            Ok(Some(path))
+            Ok(ImportRun { path: Some(path), file: name, others: Vec::new() })
         }
         other => {
             let e = match other {
@@ -529,6 +611,22 @@ mod tests {
     fn utf16_offsets() {
         assert_eq!(utf16("árvíz", 2), 1);
         assert_eq!(utf16("a😀b", 5), 3);
+        // Inside a character (or past the end) counts from its start instead of failing.
+        assert_eq!(utf16("árvíz", 1), 0);
+        assert_eq!(utf16("a😀b", 3), 1);
+        assert_eq!(utf16("ab", 9), 2);
+    }
+
+    #[test]
+    fn marks_after_wide_spaces_map_to_the_editor() {
+        // The pitfall: a mark after a no-break space used to be cut inside that space and end the app.
+        let text = "SELECT 1;\nSELECT * FROM\u{a0}vevő";
+        let spans = split::split(text);
+        let stmt = &text[spans[1].start..spans[1].end];
+        let (a, b) = marks::error_range("ERROR 1064 (42000): ... near '' at line 1", stmt).unwrap();
+        let (from, to) = (utf16(text, spans[1].start + a), utf16(text, spans[1].start + b));
+        let units: Vec<u16> = text.encode_utf16().collect();
+        assert_eq!(String::from_utf16(&units[from..to]).unwrap(), "vevő");
     }
 
     #[test]

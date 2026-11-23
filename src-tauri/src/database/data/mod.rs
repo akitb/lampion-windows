@@ -4,6 +4,7 @@
 pub mod complete;
 pub mod format;
 pub mod history;
+pub mod import;
 pub mod marks;
 pub mod run;
 pub mod split;

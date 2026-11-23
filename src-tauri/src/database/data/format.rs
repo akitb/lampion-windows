@@ -12,6 +12,33 @@ pub fn cell(v: &Value, binary: bool) -> Option<String> {
     }
 }
 
+/// Grid cells longer than this many bytes are cut (the inspector loads a whole value when asked).
+pub const MAX_CELL: usize = 64 * 1024;
+/// Ends a cut cell. A cut value never matches its row, so it can't be written back or find another row.
+pub const CUT_MARK: &str = "…";
+
+/// `cell`, cut to at most `max` bytes (on a character boundary, hex of whole bytes) plus `CUT_MARK`;
+/// the flag tells whether it was cut. Only the shown part is converted, so a 1 GB blob costs 64 KB.
+pub fn grid_cell(v: &Value, binary: bool, max: usize) -> (Option<String>, bool) {
+    let Value::Bytes(b) = v else { return (cell(v, binary), false) };
+    let text = if binary { None } else { std::str::from_utf8(b).ok() };
+    let size = text.map_or(2 + 2 * b.len(), str::len);
+    if size <= max || b.is_empty() {
+        return (cell(v, binary), false);
+    }
+    let shown = match text {
+        Some(s) => {
+            let mut end = max;
+            while !s.is_char_boundary(end) {
+                end -= 1;
+            }
+            s[..end].to_string()
+        }
+        None => format!("0x{}", hex::encode_upper(&b[..max.saturating_sub(2) / 2])),
+    };
+    (Some(shown + CUT_MARK), true)
+}
+
 /// Columns whose bytes are shown as hex: binary strings, blobs, BIT and geometry.
 pub fn is_binary_column(c: &Column) -> bool {
     use ColumnType::*;
@@ -23,10 +50,12 @@ pub fn is_binary_column(c: &Column) -> bool {
         )
 }
 
-/// A declared type that holds bytes, not text (the inspector shows it read-only).
+/// A declared type that holds bytes, not text (the inspector shows it read-only). Only the base type
+/// counts: `enum('text','binary')` holds text.
 pub fn is_binary_type(sql_type: &str) -> bool {
-    let t = sql_type.to_ascii_lowercase();
-    t.contains("blob") || t.contains("binary") || t.starts_with("bit")
+    let t = sql_type.trim().to_ascii_lowercase();
+    let base = t.split(|c: char| c == '(' || c.is_whitespace()).next().unwrap_or("");
+    matches!(base, "binary" | "varbinary" | "tinyblob" | "blob" | "mediumblob" | "longblob" | "bit" | "vector")
 }
 
 /// The kind of value a type holds; drives colours, alignment and icons.
@@ -150,6 +179,26 @@ mod tests {
         assert_eq!(family("point"), "spatial");
         assert_eq!(family("something"), "other");
         assert!(is_binary_type("varbinary(16)") && is_binary_type("bit(1)") && !is_binary_type("varchar(5)"));
+        assert!(is_binary_type("LONGBLOB") && is_binary_type("binary(16)") && is_binary_type("vector(3)"));
+        // The type's words, not its values: these hold text.
+        assert!(!is_binary_type("enum('text','binary')") && !is_binary_type("set('blob','bit')") && !is_binary_type("char(10)"));
+    }
+
+    #[test]
+    fn long_cells_are_cut_for_the_grid() {
+        let short = Value::Bytes(b"abc".to_vec());
+        assert_eq!(grid_cell(&short, false, 8), (Some("abc".into()), false));
+        assert_eq!(grid_cell(&Value::NULL, false, 8), (None, false));
+        assert_eq!(grid_cell(&Value::Int(123456789), false, 3), (Some("123456789".into()), false));
+        // Text is cut on a character boundary: "ő" is two bytes and doesn't fit in the fifth.
+        let text = Value::Bytes("abcdőxyz".as_bytes().to_vec());
+        assert_eq!(grid_cell(&text, false, 5), (Some(format!("abcd{CUT_MARK}")), true));
+        // Binary: hex of whole bytes within the limit.
+        let blob = Value::Bytes(vec![0xAB; 10]);
+        assert_eq!(grid_cell(&blob, true, 8), (Some(format!("0xABABAB{CUT_MARK}")), true));
+        assert_eq!(grid_cell(&blob, true, 22), (Some(format!("0x{}", "AB".repeat(10))), false));
+        // A cut value is no `0x…` literal, so it is never written as one.
+        assert!(!crate::database::commands::data::sql::is_hex(&grid_cell(&blob, true, 8).0.unwrap()));
     }
 
     #[test]

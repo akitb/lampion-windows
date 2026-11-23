@@ -152,11 +152,26 @@ pub struct SqlLogEntry {
     pub millis: u64,
 }
 
+/// The console shows at most this much of a statement or error (a pasted dump or a long value stays here).
+const LOG_MAX: usize = 4096;
+
+/// `s`, cut to `LOG_MAX` bytes on a character boundary.
+fn log_text(s: &str) -> String {
+    if s.len() <= LOG_MAX {
+        return s.to_string();
+    }
+    let mut end = LOG_MAX;
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &s[..end])
+}
+
 /// Every statement Lampion runs goes to the SQL console (`database://sql`).
 pub fn log_sql(sql: &str, error: Option<&String>, started: std::time::Instant) {
     crate::core::emit(
         "database://sql",
-        SqlLogEntry { sql: sql.to_string(), error: error.cloned(), millis: started.elapsed().as_millis() as u64 },
+        SqlLogEntry { sql: log_text(sql), error: error.map(|e| log_text(e)), millis: started.elapsed().as_millis() as u64 },
     );
 }
 
@@ -236,5 +251,13 @@ mod tests {
         assert_eq!(ident("a`b"), "`a``b`");
         assert_eq!(qualified("d", "t"), "`d`.`t`");
         assert_eq!(literal(r"it's \x"), r"'it\'s \\x'");
+    }
+
+    #[test]
+    fn console_lines_stay_small() {
+        assert_eq!(log_text("SELECT 1"), "SELECT 1");
+        let long = format!("{}ő", "a".repeat(LOG_MAX - 1));
+        // The two-byte "ő" doesn't fit: cut before it.
+        assert_eq!(log_text(&long), format!("{}…", "a".repeat(LOG_MAX - 1)));
     }
 }

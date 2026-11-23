@@ -103,6 +103,7 @@ pub fn run() {
             database::commands::db_tables,
             database::commands::db_columns,
             database::commands::db_page,
+            database::commands::db_cell,
             database::commands::db_update_row,
             database::commands::db_insert_row,
             database::commands::db_delete_rows,
