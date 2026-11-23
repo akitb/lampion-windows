@@ -22,6 +22,8 @@
   let el: HTMLDivElement | undefined = $state();
   let origin = { x: 0, y: 0 };
   let press: Point | null = null;
+  /** The pointer a press follows: a second finger on a touch screen is ignored until it lets go. */
+  let pointer: number | null = null;
   let mode = $state.raw<Mode | null>(null);
   /** While panning or zooming, the world is its own layer (no repaint per frame); then it is redrawn crisp. */
   let moving = $state(false);
@@ -112,8 +114,9 @@
   // ---- Pointer ----
 
   function down(e: PointerEvent) {
-    if (e.button !== 0 || !el) return;
+    if (e.button !== 0 || !el || (pointer !== null && e.pointerId !== pointer)) return;
     measureOrigin();
+    pointer = e.pointerId;
     press = at(e);
     el.setPointerCapture(e.pointerId);
   }
@@ -141,6 +144,7 @@
   }
 
   function pointerMove(e: PointerEvent) {
+    if (pointer !== null && e.pointerId !== pointer) return;
     const s = at(e);
     if (press && !mode && Math.hypot(s.x - press.x, s.y - press.y) >= 2) begin(press);
     const m = mode;
@@ -151,7 +155,9 @@
   }
 
   function finish(e: PointerEvent, cancelled: boolean) {
+    if (e.pointerId !== pointer) return;
     const m = mode;
+    pointer = null;
     press = null;
     mode = null;
     if (m?.kind === "move") {
@@ -257,6 +263,7 @@
   onpointermove={pointerMove}
   onpointerup={(e) => finish(e, false)}
   onpointercancel={(e) => finish(e, true)}
+  onlostpointercapture={(e) => finish(e, true)}
   onpointerenter={measureOrigin}
   onpointerleave={leave}
   ondblclick={doubleClick}
