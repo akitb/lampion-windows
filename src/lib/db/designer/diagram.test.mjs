@@ -317,3 +317,28 @@ test("the loader shows the cache at once, reads once, and drops stale answers", 
   await Promise.all([broken, current]);
   assert.deepEqual(failed, ["ERROR 2002"]);
 });
+
+test("a schema put after an add or drop wins over the read under way", async () => {
+  const reads = [];
+  const read = (db) => new Promise((resolve) => reads.push(resolve));
+  const cache = new Map([["a", { db: "a", v: 1 }]]);
+  const shown = [];
+  const loader = new Loader(read, (x, y) => x.v === y.v, cache);
+  const show = (x) => shown.push(x.db + ":" + x.v);
+
+  const background = loader.load("a", show, () => {});
+  assert.deepEqual(shown, ["a:1"]);
+  loader.put("a", { db: "a", v: 2 });
+  reads[0]({ db: "a", v: 1 }); // read before the change: stale
+  await background;
+  assert.deepEqual(shown, ["a:1"], "the old schema does not come back");
+  assert.equal(cache.get("a").v, 2);
+
+  // Another database is shown now: its cache is updated, and the current read still counts.
+  const other = loader.load("b", show, () => {});
+  loader.put("a", { db: "a", v: 3 });
+  reads[1]({ db: "b", v: 1 });
+  await other;
+  assert.deepEqual(shown, ["a:1", "b:1"]);
+  assert.equal(cache.get("a").v, 3);
+});

@@ -617,4 +617,11 @@ export class Loader<T> {
     this.cache.set(key, fresh);
     if (old === undefined || !this.#same(old, fresh)) show(fresh);
   }
+
+  /** A value newer than any read under way (the schema an add or drop returned): it goes in the cache, and a
+   *  read of the same key that started before it is dropped, so it can't bring the old value back. */
+  put(key: string, value: T) {
+    this.cache.set(key, value);
+    if (key === this.#current) this.#ticket++;
+  }
 }

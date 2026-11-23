@@ -193,10 +193,10 @@ export class DesignerStore {
     clearTimeout(this.#reloadTimer);
   }
 
-  /** A schema that came back from adding or dropping a relation. */
+  /** A schema that came back from adding or dropping a relation; cached even when another database is shown now. */
   applySchema(s: DesignerSchema) {
+    this.#loader.put(s.database, { schema: s, positions: cache.get(s.database)?.positions ?? {} });
     if (s.database !== this.database) return;
-    cache.set(s.database, { schema: s, positions: cache.get(s.database)?.positions ?? {} });
     this.#apply({ schema: s, positions: {} });
   }
 
