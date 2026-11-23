@@ -5,7 +5,7 @@
   import { db } from "./dbstate.svelte";
   import Empty from "./Empty.svelte";
   import Grid from "./Grid.svelte";
-  import { applyFilter, askDeleteSelected, clearSort, data, loadData, PAGE_SIZE, sortBy, turnPage, ui, updateRow } from "./model.svelte";
+  import { applyFilter, askDeleteSelected, clearSort, data, loadData, PAGE_SIZE, sortBy, turnPage, ui, updateRow, wholeCell } from "./model.svelte";
   import RowInspector from "./RowInspector.svelte";
   import { count, reducedMotion } from "./util";
 
@@ -72,6 +72,8 @@
           <Grid
             columns={data.page.columns}
             rows={data.page.rows}
+            cut={data.page.cut}
+            loadCell={wholeCell}
             info={data.info}
             version={data.version}
             {scrollKey}
@@ -95,7 +97,7 @@
     </div>
 
     <div class="dbbar bottom">
-      <span class="info" title="Double-click a cell to edit it. Right-click a cell to copy it or set it to NULL.">{range}</span>
+      <span class="info" title="Double-click a cell (or press Enter / F2) to edit it. Right-click a cell (or press Shift+F10) to copy it or set it to NULL.">{range}</span>
       {#if data.selected.length}
         <span class="dot">·</span>
         <span class="info">{count(data.selected.length)} selected</span>

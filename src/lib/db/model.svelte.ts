@@ -1,7 +1,7 @@
 // The Database Manager window (part A): connection, sidebar, Data and Query state, and the actions
 // behind them. Port of the macOS DBModel. Shared state for part B lives in dbstate.svelte.ts.
 import type { EditorState } from "@codemirror/state";
-import { askConfirm, db, schemaChanged, server, showError, type DbTab } from "./dbstate.svelte";
+import { askConfirm, db, dialogs, schemaChanged, server, showError, type DbTab } from "./dbstate.svelte";
 import { dbapi, message } from "./dbapi.svelte";
 import type { MenuItem } from "./menu.svelte";
 import type { ColumnInfo, Grid, TableInfo } from "./types";
@@ -76,11 +76,15 @@ class QueryState {
   truncated = $state(false);
   /** Bumped by every run. */
   version = $state(0);
+  /** A run is in flight: Run waits for it. */
+  running = $state(false);
   history = $state.raw<string[]>([]);
   /** The editor's share of the height while the results are shown. */
   split = $state(0.5);
   /** The editor's state between visits to the tab (text, selection, undo). */
   editor: EditorState | null = null;
+  /** Set by the open editor: puts its latest text into `text` (updated only after a pause in typing). */
+  flush: (() => void) | null = null;
 }
 export const query = new QueryState();
 
@@ -125,7 +129,7 @@ export async function reloadAll() {
   else if (db.table) loadTable();
 }
 
-/** Uses the root password the user typed (kept in memory only) and connects. */
+/** Uses the root password the user typed and connects (once it works it is kept, encrypted, for the next launch). */
 export async function connectWithPassword(password: string) {
   try {
     await dbapi.setPassword(password);
@@ -136,9 +140,14 @@ export async function connectWithPassword(password: string) {
   await reloadAll();
 }
 
+/** The latest `loadTables` call per database: an older answer arriving later is dropped. */
+const tablesSeq: Record<string, number> = {};
+
 export async function loadTables(d: string) {
+  const seq = (tablesSeq[d] = (tablesSeq[d] ?? 0) + 1);
   try {
     const info = await dbapi.tables(d);
+    if (tablesSeq[d] !== seq) return;
     server.tables[d] = info.tables;
     ui.dbInfo[d] = { size: info.size, collation: info.collation };
     if (db.database === d && db.table) {
@@ -233,7 +242,7 @@ export async function loadData(after?: () => void) {
     const p = await dbapi.page(d, t, data.filter, data.orderBy, data.ascending, data.offset);
     if (seq !== loadSeq) return;
     data.error = null;
-    data.page = { columns: p.columns.length ? p.columns : data.info.map((c) => c.name), rows: p.rows };
+    data.page = { columns: p.columns.length ? p.columns : data.info.map((c) => c.name), rows: p.rows, cut: p.cut };
     data.total = p.total;
   } catch (e) {
     if (seq !== loadSeq) return;
@@ -243,6 +252,8 @@ export async function loadData(after?: () => void) {
   }
   data.selected = [];
   data.version++;
+  // A delete asked about rows that are no longer where they were.
+  if (dialogs.confirm?.action === deleteAsked) dialogs.confirm = null;
   after?.();
 }
 
@@ -289,40 +300,64 @@ function reselect(expected: (string | null)[], fallback: number) {
   else if (fallback < data.page.rows.length) data.selected = [fallback];
 }
 
-/** Writes changed fields of one row (grid edit, Set to NULL, inspector Save) and keeps it selected. */
-export async function updateRow(row: number, changes: { column: number; value: string | null }[]) {
+/** Writes changed fields of one row (grid edit, Set to NULL, inspector Save) and keeps it selected.
+ * `version`: the `data.version` the row index belongs to (a menu opened before a reload); nothing is
+ * written once the rows changed. Returns true when saved; a failed save keeps the rows (and the
+ * inspector's draft) as they are. */
+export async function updateRow(row: number, changes: { column: number; value: string | null }[], version = data.version): Promise<boolean> {
   const d = db.database;
   const t = db.table;
   const original = data.page.rows[row];
-  if (!d || !t || !original || !changes.length) return;
+  if (!d || !t || !original || !changes.length || version !== data.version) return false;
   const expected = [...original];
   for (const c of changes) expected[c.column] = c.value;
   try {
     await dbapi.updateRow(d, t, data.page.columns, original, changes);
   } catch (e) {
     showError(message(e));
+    return false;
   }
   await loadData(() => reselect(expected, row));
+  return true;
 }
 
+/** The whole value of a cell the page got cut (64 KB); rejects when the row can't be found again. */
+export async function wholeCell(row: number, column: number): Promise<string | null> {
+  const d = db.database;
+  const t = db.table;
+  const values = data.page.rows[row];
+  if (!d || !t || !values) throw "The row is no longer shown.";
+  return dbapi.cell(d, t, data.page.columns, values, column);
+}
+
+/** The open delete confirmation's action; a reload closes it (see `loadData`). */
+let deleteAsked: (() => void) | null = null;
+
 export function askDeleteSelected() {
-  const n = data.selected.length;
-  if (!n) return;
+  const d = db.database;
+  const t = db.table;
+  // The rows as they are now: a reload while the question is open must not delete others.
+  const columns = data.page.columns;
+  const rows = data.selected.map((i) => data.page.rows[i]).filter(Boolean);
+  const version = data.version;
+  const n = rows.length;
+  if (!d || !t || !n) return;
+  const action = () => {
+    deleteAsked = null;
+    if (version === data.version) deleteRows(d, t, columns, rows);
+  };
+  deleteAsked = action;
   askConfirm({
     title: n === 1 ? "Delete the selected row?" : `Delete the ${n} selected rows?`,
     message: "This can't be undone.",
     button: "Delete",
-    action: deleteSelected,
+    action,
   });
 }
 
-async function deleteSelected() {
-  const d = db.database;
-  const t = db.table;
-  if (!d || !t) return;
-  const rows = data.selected.map((i) => data.page.rows[i]).filter(Boolean);
+async function deleteRows(d: string, t: string, columns: string[], rows: (string | null)[][]) {
   try {
-    await dbapi.deleteRows(d, t, data.page.columns, rows);
+    await dbapi.deleteRows(d, t, columns, rows);
   } catch (e) {
     showError(message(e));
   }
@@ -414,9 +449,21 @@ export async function exportItem(d: string, t: string | null = null) {
   }
 }
 
-export async function importInto(d: string | null) {
+export async function importInto(d: string | null, confirmed = false) {
   try {
-    if (!(await dbapi.import(d))) return;
+    const r = await dbapi.import(d, confirmed);
+    if (r.others.length && d) {
+      // A whole-database export switches to its own database: its statements would not run in `d`.
+      const names = r.others.map((o) => `“${o}”`).join(", ");
+      askConfirm({
+        title: `Import “${r.file}” into “${d}”?`,
+        message: `The file switches to or creates ${r.others.length === 1 ? "the database" : "the databases"} ${names} (USE / CREATE DATABASE), so its statements run there, not in “${d}”.`,
+        button: "Import Anyway",
+        action: () => importInto(d, true),
+      });
+      return;
+    }
+    if (!r.path) return;
   } catch (e) {
     showError(message(e));
   }
@@ -476,12 +523,18 @@ export async function clearHistory() {
   query.history = [];
 }
 
-/** Runs the editor's text in the chosen database (or the sidebar's). */
+let runSeq = 0;
+
+/** Runs the editor's text in the chosen database (or the sidebar's); one run at a time, in order. */
 export async function runQuery() {
+  query.flush?.();
   const text = query.text;
-  if (!text.trim()) return;
+  if (!text.trim() || query.running) return;
+  const seq = ++runSeq;
+  query.running = true;
   try {
     const r = await dbapi.runQuery(query.database ?? db.database, text);
+    if (seq !== runSeq) return;
     const time = `${r.seconds.toFixed(3)} s`;
     query.sets = r.sets;
     query.truncated = r.truncated;
@@ -499,10 +552,13 @@ export async function runQuery() {
     // A statement without rows may have created, changed or dropped something: every view reloads.
     if (r.affected !== null) schemaChanged();
   } catch (e) {
+    if (seq !== runSeq) return;
     query.sets = [];
     query.error = message(e);
     query.errorRange = null;
     query.message = "";
     query.version++;
+  } finally {
+    if (seq === runSeq) query.running = false;
   }
 }

@@ -79,7 +79,7 @@
 
 <div class="query">
   <div class="dbbar top">
-    <button type="button" class="run" disabled={!query.text.trim()} onclick={runQuery} title="Run the SQL in the editor (Ctrl+R)">
+    <button type="button" class="run" disabled={!query.text.trim() || query.running} onclick={runQuery} title={query.running ? "The query is running…" : "Run the SQL in the editor (Ctrl+R)"}>
       <Play size={12} strokeWidth={0} fill="currentColor" /> Run
     </button>
     <button type="button" class="menubtn" onclick={databaseMenu} aria-haspopup="menu"
@@ -124,7 +124,7 @@
       {#if query.error}
         <span class="err"><span class="solid"><TriangleAlert size={12} strokeWidth={2.2} /></span> Error</span>
       {:else if shown}
-        <span class="sum" title={query.truncated ? "Only the first 100,000 rows of a result are shown" : undefined}>{query.truncated ? "first " : ""}{query.sets.length > 1 ? `${query.sets.length} results · ${rowsText(shown.rows.length)}` : `${rowsText(shown.rows.length)} · ${shown.columns.length === 1 ? "1 column" : `${count(shown.columns.length)} columns`}`}</span>
+        <span class="sum" title={query.truncated ? "Only the first rows of a result are shown (at most 100,000 rows or 64 MB)" : undefined}>{query.truncated ? "first " : ""}{query.sets.length > 1 ? `${query.sets.length} results · ${rowsText(shown.rows.length)}` : `${rowsText(shown.rows.length)} · ${shown.columns.length === 1 ? "1 column" : `${count(shown.columns.length)} columns`}`}</span>
       {:else if query.version > 0 && query.message}
         <span class="sum">{query.message}</span>
       {:else}
@@ -158,7 +158,7 @@
                 </div>
               {/if}
               <div class="grid">
-                <Grid columns={shown.columns} rows={shown.rows} version={query.version * 100 + query.shown} scrollKey={`${query.version}-${query.shown}`} label="Result" />
+                <Grid columns={shown.columns} rows={shown.rows} cut={shown.cut} version={query.version * 100 + query.shown} scrollKey={`${query.version}-${query.shown}`} label="Result" />
               </div>
             {:else if query.version > 0 && query.message}
               <Empty icon={CircleCheck} title="Query Finished" description={query.message} />

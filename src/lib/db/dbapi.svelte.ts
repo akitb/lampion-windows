@@ -1,7 +1,7 @@
 // The data/query commands (Rust: database/commands.rs). Every call counts as "busy" while it runs,
 // so the Refresh button can pulse during slow work.
 import { call } from "$lib/api";
-import type { ColumnInfo, Completion, DatabaseInfo, Page, QueryRun, ServerInfo, SyntaxWords } from "./types";
+import type { ColumnInfo, Completion, DatabaseInfo, ImportRun, Page, QueryRun, ServerInfo, SyntaxWords } from "./types";
 
 /** Statements in flight. Only the busy indicators read it, so changes don't redraw the window. */
 export const activity = $state({ busy: 0 });
@@ -29,6 +29,9 @@ export const dbapi = {
     track(call<Page>("db_page", { database, table, filter, orderBy, ascending, offset })),
   updateRow: (database: string, table: string, columns: string[], row: (string | null)[], changes: { column: number; value: string | null }[]) =>
     track(call("db_update_row", { database, table, columns, row, changes })),
+  /** The whole value of a cell the grid got cut (`Grid.cut`); the row is found as an edit finds it. */
+  cell: (database: string, table: string, columns: string[], row: (string | null)[], column: number) =>
+    track(call<string | null>("db_cell", { database, table, columns, row, column })),
   insertRow: (database: string, table: string, values: Record<string, string>) => track(call("db_insert_row", { database, table, values })),
   deleteRows: (database: string, table: string, columns: string[], rows: (string | null)[][]) =>
     track(call("db_delete_rows", { database, table, columns, rows })),
@@ -46,7 +49,7 @@ export const dbapi = {
     call<string>("db_insert_text", { table, columns, numeric, binary, rows }),
   /** Resolves to the saved file, or null when the save dialog was cancelled. */
   export: (database: string, table: string | null) => track(call<string | null>("db_export", { database, table })),
-  /** Resolves to the imported file, or null when cancelled. */
-  import: (database: string | null) => track(call<string | null>("db_import", { database })),
+  /** `confirmed`: runs the file the previous call held back (`others`) once the user agreed. */
+  import: (database: string | null, confirmed = false) => track(call<ImportRun>("db_import", { database, confirmed })),
   showMainWindow: () => call("db_show_main_window"),
 };

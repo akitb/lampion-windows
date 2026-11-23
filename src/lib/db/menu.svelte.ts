@@ -15,13 +15,25 @@ export const menu = $state({
   minWidth: 0,
   /** Opened from the keyboard: focus the first item. */
   keyboard: false,
+  /** Who opened it (`contextMenu`'s `owner`): that view closes it when what it was about changes. */
+  owner: "",
 });
 
+/** Gets the focus back when a menu opened from the keyboard closes. */
+let returnTo: HTMLElement | null = null;
+
 /** Right-click menu at the pointer. */
-export function contextMenu(e: MouseEvent, items: MenuItem[]) {
+export function contextMenu(e: MouseEvent, items: MenuItem[], owner = "") {
   e.preventDefault();
   e.stopPropagation();
-  Object.assign(menu, { items, x: e.clientX, y: e.clientY, alignRight: false, anchorTop: e.clientY, minWidth: 0, keyboard: e.button !== 2, open: true });
+  returnTo = null;
+  Object.assign(menu, { items, x: e.clientX, y: e.clientY, alignRight: false, anchorTop: e.clientY, minWidth: 0, keyboard: e.button !== 2, owner, open: true });
+}
+
+/** The context menu opened from the keyboard (Shift+F10, the Menu key) at a point; focus returns to `from`. */
+export function keyboardMenu(x: number, y: number, items: MenuItem[], from: HTMLElement, owner = "") {
+  returnTo = from;
+  Object.assign(menu, { items, x, y, alignRight: false, anchorTop: y, minWidth: 0, keyboard: true, owner, open: true });
 }
 
 let closedAt = 0;
@@ -30,12 +42,18 @@ let anchor: Element | null = null;
 /** MenuHost reports closing, so a second click on the same button closes instead of reopening. */
 export function menuClosed() {
   closedAt = performance.now();
+  const el = returnTo;
+  returnTo = null;
+  // After an item ran, unless it moved the focus somewhere (a sheet, an input).
+  if (el) setTimeout(() => { if (document.activeElement === document.body || document.activeElement?.closest("[role=menu]")) el.focus({ preventScroll: true }); });
 }
 
 /** Menu under a button (pull-down). */
 export function dropdown(el: HTMLElement, items: MenuItem[], opts: { alignRight?: boolean; keyboard?: boolean } = {}) {
   if (anchor === el && performance.now() - closedAt < 250) return;
   anchor = el;
+  returnTo = null;
+  menu.owner = "";
   const r = el.getBoundingClientRect();
   Object.assign(menu, {
     items,

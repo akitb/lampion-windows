@@ -1,18 +1,25 @@
 <script lang="ts">
   // One row as a form: name, type, key badges, NULL switch and the value of every field; Save writes
-  // only the changed fields in one UPDATE. Binary columns and views are read-only.
+  // only the changed fields in one UPDATE. Binary columns and views are read-only; a value the grid got
+  // cut (64 KB) is read-only until its whole value is loaded, so a cut value is never written back.
   import { Lock } from "@lucide/svelte";
-  import { db } from "./dbstate.svelte";
+  import { message } from "./dbapi.svelte";
+  import { db, showError } from "./dbstate.svelte";
   import KeyBadge, { badges } from "./KeyBadge.svelte";
-  import { data, updateRow } from "./model.svelte";
+  import { data, updateRow, wholeCell } from "./model.svelte";
   import TypeChip from "./TypeChip.svelte";
 
   let { row, original }: { row: number; original: (string | null)[] } = $props();
 
   const initial = () => [...original];
+  /** The values Save and Revert compare with: as loaded, with whole values in place of cut ones. */
+  let base = $state(initial());
   let draft = $state(initial());
+  /** Columns of this row the grid got cut whose whole value isn't loaded yet. */
+  let cutCols = $state((data.page.cut ?? []).filter(([r]) => r === row).map(([, c]) => c));
+  let loading = $state(-1);
   const readOnly = $derived(!db.table || db.isView);
-  const changed = $derived(draft.map((v, i) => v !== original[i]));
+  const changed = $derived(draft.map((v, i) => v !== base[i]));
   const nChanged = $derived(changed.filter(Boolean).length);
   const keyText = $derived.by(() => {
     const pk = data.info.filter((c) => c.key === "PRI").map((c) => c.name);
@@ -25,8 +32,23 @@
     return /text|^json/i.test(type) || v.includes("\n") || v.length > 60;
   }
 
+  // A failed save keeps the rows, so this editor and its draft stay.
   function save() {
     updateRow(row, changed.flatMap((c, i) => (c ? [{ column: i, value: draft[i] }] : [])));
+  }
+
+  async function loadWhole(i: number) {
+    loading = i;
+    try {
+      const v = await wholeCell(row, i);
+      base[i] = v;
+      draft[i] = v;
+      cutCols = cutCols.filter((c) => c !== i);
+    } catch (e) {
+      showError(message(e));
+    } finally {
+      loading = -1;
+    }
   }
 </script>
 
@@ -44,7 +66,8 @@
   <div class="fields">
     {#each data.page.columns as name, i (i)}
       {@const info = data.info.find((c) => c.name === name)}
-      {@const editable = !readOnly && !info?.binary}
+      {@const cut = cutCols.includes(i)}
+      {@const editable = !readOnly && !info?.binary && !cut}
       <div class="field">
         <div class="line">
           <span class="name" title={info?.comment ? `${name}\n${info.comment}` : name}>{name}</span>
@@ -68,7 +91,11 @@
             <span class="nullv">NULL</span>
           </button>
         {:else if !editable}
-          <div class="box rovalue" class:changed={changed[i]} title={info?.binary ? "Binary data can't be edited here." : "Read-only"}>{(draft[i] ?? "").slice(0, 4000)}</div>
+          <div class="box rovalue" class:changed={changed[i]} title={cut ? "Only the first 64 KB are shown." : info?.binary ? "Binary data can't be edited here." : "Read-only"}>{(draft[i] ?? "").slice(0, 4000)}</div>
+          {#if cut}
+            <button type="button" class="small whole" disabled={loading >= 0} onclick={() => loadWhole(i)}
+                    title="Load the whole value{readOnly || info?.binary ? '' : ' to edit it'}">{loading === i ? "Loading…" : "Load Whole Value"}</button>
+          {/if}
         {:else if isLong(i, info?.type ?? "")}
           <textarea class="box long" class:changed={changed[i]} bind:value={draft[i]} spellcheck="false" aria-label={name}></textarea>
         {:else}
@@ -82,7 +109,7 @@
     <div class="dbbar bottom foot">
       <span class="count">{nChanged === 0 ? "No changes" : nChanged === 1 ? "1 field changed" : `${nChanged} fields changed`}</span>
       <span class="spacer"></span>
-      <button type="button" class="small" disabled={!nChanged} onclick={() => (draft = initial())} title="Discard your changes to this row">Revert</button>
+      <button type="button" class="small" disabled={!nChanged} onclick={() => (draft = [...base])} title="Discard your changes to this row">Revert</button>
       <button type="button" class="small prominent" disabled={!nChanged} onclick={save} title="Write the changed fields to the database">Save</button>
     </div>
   {/if}
@@ -136,6 +163,7 @@
     box-shadow: none;
     font-size: 12px;
   }
+  .small.whole { align-self: flex-start; }
   .small.prominent { background: var(--accent); color: var(--accent-text); }
   .small.prominent:hover:not(:disabled) { background: var(--accent); filter: brightness(1.08); }
 </style>

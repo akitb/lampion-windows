@@ -110,6 +110,7 @@
     provide: (f) => EditorView.decorations.from(f),
   });
 
+  const LINT_MAX = 500_000;
   const setLint = StateEffect.define<[number, number][]>();
   const lintMarks = StateField.define<DecorationSet>({
     create: () => Decoration.none,
@@ -138,7 +139,8 @@
         clearTimeout(this.timer);
         this.timer = window.setTimeout(async () => {
           const doc = view.state.doc;
-          const marks = await dbapi.syntaxMarks(doc.toString()).catch(() => []);
+          // shortcut: a pasted dump this big isn't checked while typing (the server still marks its errors).
+          const marks = doc.length > LINT_MAX ? [] : await dbapi.syntaxMarks(doc.toString()).catch(() => []);
           if (view.state.doc === doc) view.dispatch({ effects: setLint.of(marks) });
         }, 250);
       }
@@ -152,10 +154,13 @@
 
   const target = () => ({ database: query.database ?? db.database, table: db.table });
 
+  /** The text around the caret, where the aliases of the statement being typed are (not the whole editor per key). */
+  const around = (s: EditorState, pos: number) => s.sliceDoc(Math.max(0, pos - 8000), Math.min(s.doc.length, pos + 8000));
+
   async function suggest(ctx: CompletionContext) {
     const before = ctx.state.sliceDoc(Math.max(0, ctx.pos - 300), ctx.pos);
     const t = target();
-    const r = await dbapi.complete(t.database, t.table, before, ctx.state.doc.toString()).catch(() => null);
+    const r = await dbapi.complete(t.database, t.table, before, around(ctx.state, ctx.pos)).catch(() => null);
     if (!r || ctx.aborted || !r.items.length) return null;
     // Only while a name is typed, after "name.", or on request (Tab).
     if (!ctx.explicit && r.prefixLen === 0 && !r.qualified) return null;
@@ -176,7 +181,7 @@
       return true;
     }
     const t = target();
-    dbapi.complete(t.database, t.table, before, view.state.doc.toString()).then((r) => {
+    dbapi.complete(t.database, t.table, before, around(view.state, sel.head)).then((r) => {
       if (view.state.selection.main.head !== sel.head || view.state.sliceDoc(Math.max(0, sel.head - 300), sel.head) !== before) return;
       if (r.items.length === 1) {
         const from = sel.head - r.prefixLen;
@@ -215,6 +220,22 @@
     ".cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected]": { backgroundColor: "var(--accent)", color: "var(--accent-text)" },
   });
 
+  // ---- query.text follows the editor after a pause in typing, not on every key ----
+
+  let pending: EditorView | null = null;
+  let textTimer = 0;
+  /** The text `query.text` and the editor last agreed on. */
+  let synced = "";
+
+  /** Puts the editor's text into `query.text` now (Run calls it through `query.flush`). */
+  function syncText() {
+    clearTimeout(textTimer);
+    if (!pending) return;
+    synced = pending.state.doc.toString();
+    pending = null;
+    query.text = synced;
+  }
+
   function extensions() {
     return [
       lineNumbers(),
@@ -236,7 +257,10 @@
       ),
       keymap.of([...historyKeymap, ...defaultKeymap]),
       EditorView.updateListener.of((u) => {
-        if (u.docChanged) query.text = u.state.doc.toString();
+        if (!u.docChanged) return;
+        pending = u.view;
+        clearTimeout(textTimer);
+        textTimer = window.setTimeout(syncText, 200);
       }),
       EditorView.contentAttributes.of({ "aria-label": "SQL editor", spellcheck: "false" }),
       theme,
@@ -258,19 +282,25 @@
     seenVersion = query.version;
     const v = new EditorView({ parent: host, state: query.editor ?? EditorState.create({ doc: query.text, extensions: extensions() }) });
     view = v;
+    synced = v.state.doc.toString();
+    query.flush = syncText;
     words ??= dbapi.syntax();
     words.then((w) => { if (view === v) v.dispatch({ effects: language.reconfigure(sql(w)) }); }, () => {});
     return () => {
+      syncText();
+      query.flush = null;
       query.editor = v.state;
       v.destroy();
       view = null;
     };
   });
 
-  // Text set from outside (History, Clear).
+  // Text set from outside (History, Clear); the editor's own text comes back equal to `synced`.
   $effect(() => {
     const text = query.text;
-    if (view && view.state.doc.toString() !== text) view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } });
+    if (!view || text === synced) return;
+    synced = text;
+    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } });
   });
 
   // A finished run marks its error (or clears the old mark).

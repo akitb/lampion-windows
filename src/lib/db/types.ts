@@ -52,6 +52,8 @@ export interface ColumnInfo {
 export interface Grid {
   columns: string[];
   rows: (string | null)[][];
+  /** [row, column] of the values cut to 64 KB (they end with "…"); the whole value loads on demand. */
+  cut?: [number, number][];
 }
 
 export interface Page extends Grid {
@@ -64,7 +66,7 @@ export interface QueryRun {
   error: string | null;
   errorFrom: number | null;
   errorTo: number | null;
-  /** A result had more rows than Lampion keeps (100,000): only the first ones came. */
+  /** A result had more than Lampion keeps (100,000 rows or 64 MB): only the first rows came. */
   truncated: boolean;
   seconds: number;
   history: string[];
@@ -80,6 +82,13 @@ export interface SyntaxWords {
   keywords: string[];
   functions: string[];
   types: string[];
+}
+
+/** `db_import`: the file that ran (null: cancelled or held back), and the other databases it names (to confirm). */
+export interface ImportRun {
+  path: string | null;
+  file: string;
+  others: string[];
 }
 
 /** The `database://sql` event: one console entry. */

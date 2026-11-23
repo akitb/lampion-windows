@@ -35,6 +35,11 @@
     return out;
   });
 
+  /** The row Tab reaches: the selection, else (hidden in a closed database, the filter or System) its
+   * database's row, else the first row, so the tree always keeps one tab stop. */
+  const tabStop = $derived(rows.find((r) => isSelected(r.d, r.t?.name ?? null)) ?? rows.find((r) => !r.t && r.d === db.database) ?? rows[0]);
+  const isStop = (d: string, t: string | null) => tabStop?.d === d && (tabStop.t?.name ?? null) === t;
+
   $effect(() => {
     if (list) family = getComputedStyle(list).fontFamily;
   });
@@ -45,7 +50,7 @@
   const fit = (name: string, width: number, bold: boolean) => middle(name, width, `${bold ? 600 : 400} 13px ${family}`);
 
   function keys(e: KeyboardEvent) {
-    const i = rows.findIndex((r) => isSelected(r.d, r.t?.name ?? null));
+    const i = tabStop ? rows.indexOf(tabStop) : -1;
     const cur = rows[i];
     let next: (typeof rows)[number] | undefined;
     if (e.key === "ArrowDown") next = rows[Math.min(rows.length - 1, i + 1)];
@@ -55,7 +60,7 @@
       if (cur.t) next = { d: cur.d, t: null };
       else setExpanded(cur.d, false);
     } else if ((e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) && cur) {
-      const el = list?.querySelector<HTMLElement>("[aria-selected='true']");
+      const el = list?.querySelector<HTMLElement>("[role=treeitem][tabindex='0']");
       const r = el?.getBoundingClientRect();
       if (r) {
         const ev = new MouseEvent("contextmenu", { clientX: r.left + 24, clientY: r.bottom });
@@ -86,7 +91,7 @@
     class="row db"
     class:sel
     role="treeitem"
-    tabindex={sel || (!db.database && d === rows[0]?.d) ? 0 : -1}
+    tabindex={isStop(d, null) ? 0 : -1}
     aria-selected={sel}
     aria-expanded={open}
     onclick={() => select(d)}
@@ -110,7 +115,7 @@
           class="row table"
           class:sel={tsel}
           role="treeitem"
-          tabindex={tsel ? 0 : -1}
+          tabindex={isStop(d, t.name) ? 0 : -1}
           aria-selected={tsel}
           onclick={() => select(d, t.name)}
           onkeydown={keys}

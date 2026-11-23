@@ -3,8 +3,10 @@
   // view are drawn. With `info`, headers get a second line with the SQL type, a key for primary-key
   // columns, and numbers align right. With `table`, the menu offers "Copy Row as INSERT".
   import { ChevronDown, ChevronUp, KeyRound } from "@lucide/svelte";
-  import { dbapi } from "./dbapi.svelte";
-  import { contextMenu, type MenuItem } from "./menu.svelte";
+  import { untrack } from "svelte";
+  import { dbapi, message } from "./dbapi.svelte";
+  import { showError } from "./dbstate.svelte";
+  import { contextMenu, keyboardMenu, menu, type MenuItem } from "./menu.svelte";
   import type { ColumnInfo } from "./types";
   import { copy, flatten, isSimple, measure } from "./util";
   import { badges, KEY_HELP } from "./KeyBadge.svelte";
@@ -25,10 +27,16 @@
     onsort?: (column: string) => void;
     table?: string | null;
     label?: string;
+    /** [row, column] of values cut to 64 KB (`Grid.cut`): never edited in place. */
+    cut?: [number, number][];
+    /** The whole value of a cut cell (Copy Cell). */
+    loadCell?: (row: number, column: number) => Promise<string | null>;
   };
   let {
     columns,
     rows,
+    cut = [],
+    loadCell,
     info = [],
     version = 0,
     scrollKey = "",
@@ -48,6 +56,10 @@
   let viewH = $state(600);
   let widths = $state<number[]>([]);
   let editing = $state<{ row: number; col: number; value: string } | null>(null);
+  /** The keyboard's column: ← → move it, Enter / F2 edit it in the selected row. */
+  let cursor = $state(0);
+  /** This grid's menus (`menu.owner`): a reload closes them. */
+  const owner = `grid-${Math.random()}`;
   let anchor = -1;
   let builtKey = "";
   let seenScroll = "";
@@ -63,6 +75,8 @@
   const last = $derived(Math.min(rows.length, Math.ceil((scrollTop + viewH) / ROW) + 6));
   const visible = $derived(Array.from({ length: Math.max(0, last - first) }, (_, i) => first + i));
   const sel = $derived(new Set(selected));
+  const cutCells = $derived(new Set(cut.map(([r, c]) => `${r}:${c}`)));
+  const isCut = (r: number, c: number) => cutCells.has(`${r}:${c}`);
 
   function fonts() {
     const cs = getComputedStyle(scroller ?? document.body);
@@ -92,6 +106,7 @@
     builtKey = key;
     const f = fonts();
     widths = columns.map((_, i) => width(i, f));
+    cursor = 0;
     toTop();
   });
 
@@ -102,10 +117,13 @@
     }
   });
 
-  // A reload ends an edit in progress.
+  // A reload ends an edit in progress and closes this grid's menu: its rows may be others now.
   $effect(() => {
     void version;
     editing = null;
+    untrack(() => {
+      if (menu.open && menu.owner === owner) menu.open = false;
+    });
   });
 
   function toTop() {
@@ -122,6 +140,14 @@
     else if (top + ROW > scroller.scrollTop + viewH) scroller.scrollTop = top + ROW - viewH;
   }
 
+  function columnIntoView(c: number) {
+    if (!scroller) return;
+    const left = widths.slice(0, c).reduce((a, b) => a + b, 0);
+    const w = widths[c] ?? 0;
+    if (left < scroller.scrollLeft) scroller.scrollLeft = left;
+    else if (left + w > scroller.scrollLeft + scroller.clientWidth) scroller.scrollLeft = left + w - scroller.clientWidth;
+  }
+
   // ---- Selection ----
 
   function press(e: PointerEvent, r: number) {
@@ -129,6 +155,8 @@
     if (editing) commit();
     // Focus the grid itself: focusing the row would scroll the grid back to its left edge.
     scroller?.focus({ preventScroll: true });
+    const c = cellAt(e);
+    if (c >= 0) cursor = c;
     if (e.ctrlKey || e.metaKey) {
       selected = sel.has(r) ? selected.filter((x) => x !== r) : [...selected, r].sort((a, b) => a - b);
       anchor = r;
@@ -141,9 +169,35 @@
     }
   }
 
+  /** The selected row the keyboard acts on (the last one clicked or moved to). */
+  function current(): number {
+    return selected.includes(anchor) ? anchor : (selected[0] ?? -1);
+  }
+
   function keys(e: KeyboardEvent) {
-    if (editing) return;
+    // Keys on a header button (Enter sorts) or the edit field are theirs.
+    if (editing || e.target !== scroller) return;
     const mod = e.ctrlKey || e.metaKey;
+    const r = current();
+    if ((e.key === "Enter" || e.key === "F2") && !mod && r >= 0) {
+      if (beginAt(r, cursor)) e.preventDefault();
+      return;
+    }
+    if ((e.key === "F10" && e.shiftKey) || e.key === "ContextMenu") {
+      e.preventDefault();
+      if (r < 0 || !scroller) return;
+      scrollIntoView(r);
+      const box = scroller.getBoundingClientRect();
+      const x = Math.min(box.right - 20, box.left + widths.slice(0, cursor).reduce((a, b) => a + b, 0) - scroller.scrollLeft + 12);
+      keyboardMenu(Math.max(box.left + 4, x), box.top + headH + (r + 1) * ROW - scroller.scrollTop, menuItems(r, cursor), scroller, owner);
+      return;
+    }
+    if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && !mod && columns.length) {
+      cursor = Math.max(0, Math.min(columns.length - 1, cursor + (e.key === "ArrowRight" ? 1 : -1)));
+      columnIntoView(cursor);
+      e.preventDefault();
+      return;
+    }
     if (mod && e.key.toLowerCase() === "c") {
       if (selected.length) copy(tsv(selected));
       e.preventDefault();
@@ -172,12 +226,15 @@
     return el ? Number(el.dataset.c) : -1;
   }
 
-  function begin(e: MouseEvent, r: number) {
-    const c = cellAt(e);
+  /** Starts editing a cell in place; false when it can't be (long, multi-line, cut or read-only). */
+  function beginAt(r: number, c: number): boolean {
     const v = rows[r]?.[c];
-    if (!editable || c < 0 || v === undefined || (v !== null && !isSimple(v))) return;
+    if (!editable || c < 0 || v === undefined || (v !== null && !isSimple(v)) || isCut(r, c)) return false;
     selected = [r];
+    anchor = r;
+    cursor = c;
     editing = { row: r, col: c, value: v ?? "" };
+    return true;
   }
 
   function commit() {
@@ -224,20 +281,43 @@
     await copy(text);
   }
 
-  function menuFor(e: MouseEvent, r: number) {
-    const c = cellAt(e);
+  async function copyCell(r: number, c: number) {
+    try {
+      // A cut value is copied whole.
+      const v = isCut(r, c) && loadCell ? await loadCell(r, c) : rows[r][c];
+      await copy(v ?? "NULL");
+    } catch (e) {
+      showError(message(e));
+    }
+  }
+
+  /** The row menu. Its actions belong to the rows as they are now: after a reload they do nothing. */
+  function menuItems(r: number, c: number): MenuItem[] {
     const targets = sel.has(r) ? [...selected] : [r];
     const n = targets.length;
+    const at = version;
+    const now = (f: () => void) => () => {
+      if (version === at) f();
+    };
+    const someCut = cut.some(([row]) => targets.includes(row));
     const items: MenuItem[] = [];
-    if (c >= 0) items.push({ label: "Copy Cell", action: () => copy(rows[r][c] ?? "NULL") });
-    items.push({ label: n > 1 ? `Copy ${n} Rows` : "Copy Row", action: () => copy(tsv(targets)) });
-    if (table) items.push({ label: n > 1 ? `Copy ${n} Rows as INSERT` : "Copy Row as INSERT", action: () => copyInsert(targets) });
+    if (c >= 0) items.push({ label: "Copy Cell", action: now(() => copyCell(r, c)) });
+    items.push({ label: n > 1 ? `Copy ${n} Rows` : "Copy Row", action: now(() => copy(tsv(targets))) });
+    // A cut value would go into the INSERT cut.
+    if (table) items.push({ label: n > 1 ? `Copy ${n} Rows as INSERT` : "Copy Row as INSERT", disabled: someCut, action: now(() => copyInsert(targets)) });
     if (c >= 0) items.push({ label: "Copy Column Name", action: () => copy(columns[c]) });
     if (editable && c >= 0) {
       items.push({ separator: true });
-      items.push({ label: "Set to NULL", disabled: rows[r][c] === null, action: () => onedit?.(r, c, null) });
+      // Not for NOT NULL columns: a relaxed sql_mode would store 0 or '' instead of failing.
+      items.push({ label: "Set to NULL", disabled: rows[r][c] === null || colInfo[c]?.nullable === false, action: now(() => onedit?.(r, c, null)) });
     }
-    contextMenu(e, items);
+    return items;
+  }
+
+  function menuFor(e: MouseEvent, r: number) {
+    const c = cellAt(e);
+    if (c >= 0) cursor = c;
+    contextMenu(e, menuItems(r, c), owner);
   }
 
   // ---- Column widths ----
@@ -294,8 +374,8 @@
             class="hbtn"
             class:right={right[i]}
             class:two
-            tabindex="-1"
-            title={headerTip(i)}
+            tabindex={onsort ? 0 : -1}
+            title={onsort ? `${headerTip(i)}\nClick or press Enter to sort` : headerTip(i)}
             onclick={() => { if (!dragged) onsort?.(name); }}
           >
             <span class="title">
@@ -326,12 +406,14 @@
         aria-selected={sel.has(r)}
         onpointerdown={(e) => press(e, r)}
         onmousedown={(e) => { if (!(e.target instanceof HTMLInputElement)) e.preventDefault(); }}
-        ondblclick={(e) => begin(e, r)}
+        ondblclick={(e) => beginAt(r, cellAt(e))}
         oncontextmenu={(e) => menuFor(e, r)}
       >
         {#each columns as _, c (c)}
           {@const v = rows[r]?.[c]}
-          <div class="cell" class:right={right[c]} style="width:{widths[c]}px" data-c={c} role="gridcell" title={v && (v.length > 60 || !isSimple(v)) ? v.slice(0, 1500) : undefined}>
+          {@const short = isCut(r, c)}
+          <div class="cell" class:right={right[c]} class:cur={c === cursor && sel.has(r)} class:cut={short} style="width:{widths[c]}px" data-c={c} role="gridcell"
+               title={short ? `Only the first 64 KB of this value are shown.${loadCell ? " Copy Cell and the row details load all of it." : ""}` : v && (v.length > 60 || !isSimple(v)) ? v.slice(0, 1500) : undefined}>
             {#if editing && editing.row === r && editing.col === c}
               <input class="edit" class:right={right[c]} bind:value={editing.value} onkeydown={editKeys} onblur={commit} use:focusInput aria-label={columns[c]} />
             {:else if v === null || v === undefined}
@@ -424,6 +506,8 @@
     user-select: none;
   }
   .cell.right { text-align: right; }
+  .cell.cut { font-style: italic; }
+  .grid:focus-visible .row.sel .cell.cur { box-shadow: inset 0 0 0 1.5px var(--accent-text); }
   .cell:first-child:not(.right) { padding-left: 14px; }
   .edit {
     width: calc(100% + 8px);

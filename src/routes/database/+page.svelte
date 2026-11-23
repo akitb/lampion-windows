@@ -92,7 +92,8 @@
     } else if (mod && (k === "r" || e.key === "Enter")) {
       // Never reload the page; Ctrl+R runs the query on the Query tab.
       e.preventDefault();
-      if (db.tab === "query") runQuery();
+      // Not while a sheet or alert is open: its Ctrl+Enter is not the Query tab's.
+      if (db.tab === "query" && !document.querySelector("dialog[open]")) runQuery();
     }
   }
 </script>
