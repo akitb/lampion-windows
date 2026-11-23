@@ -26,3 +26,22 @@ letölteni vagy beállítani; a szerverek azonnal indíthatók legyenek.
   konfigurációkat és adatbázisokat.
 - Eltávolításkor a `C:\Lampion` maradjon meg (adatvédelem), ahogy most.
 - Ha a telepítő nem tudja befejezni (nincs internet, hibás letöltés), az app első indításkor pótolja, ahogy most.
+
+## 2. Első indítás friss Windowson: a szerverek nem indulnak (felvéve: 2026-11-23)
+
+Egy friss Windows VM-en kiderült hibák (a tulajdonos gépén minden működött):
+- **VC++ runtime:** ha a telepítése újraindítást kér, a Lampion mégis elindítja a szervereket; az Apache
+  hibaüzenet nélkül leáll. Teendő: ilyenkor „Restart Windows…” állapot, a szerverek csak újraindítás után induljanak.
+- **`httpd -t` mint „futó Apache”:** lassú gépen az állapotfigyelő a konfigurációtesztet futó Apache-nak nézi,
+  ezért az Apache indítása kimarad („Started (externally)”, majd „Stopped unexpectedly”). Teendő: a valódi
+  szervert a parancssora alapján felismerni.
+- **MariaDB 11.8 RSA-kulcs:** azon a gépen a kulcsgenerálás nem sikerül, ezért a `caching_sha2_password`
+  modul és az automatikus SSL miatt a MariaDB nem indul. Kézi megoldás, ami működött: a `my.ini` `[mysqld]`
+  részébe `caching_sha2_password=OFF` és `skip-ssl`. Teendő: új telepítésnél `caching_sha2_password=OFF`
+  alapból; ha az indítás ezzel a hibával bukik, a Lampion maga írja be a hiányzó sort/sorokat (mentéssel),
+  és újrapróbálja. A Lampion saját MariaDB-eszközei (mariadb-admin, mariadb-dump, mariadb.exe) SSL nélkül is
+  működjenek.
+
+**Félkész munka:** egy agent már elkezdte, a változtatásai a `git stash` első elemében vannak
+(„WIP: first-run fix on fresh Windows …”). Folytatás: `git stash pop`, átnézni, befejezni, tesztelni.
+Utána kiadás `v1.0.2` néven.
