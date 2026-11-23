@@ -83,7 +83,9 @@ Shared files you may only *append to* in your own marked place:
 ## Build and check (this is the owner's everyday PC: keep the load low)
 
 - **Never launch the app**: no `npm run tauri dev`, no `npm run tauri build`, no running `lampion.exe`,
-  no `npm run dev`. The owner allows launching only after a full review and their explicit OK; the lead does that.
+  no `npm run dev`. The app runs only inside Windows Sandbox (`sandbox/run-sandbox.ps1`), only after a full
+  review and the owner's explicit OK, and only the lead starts it. `--selftest` / `--dbtest` results are read
+  from `%LOCALAPPDATA%\Lampion\*.log`, which the sandbox script copies out.
 - **Never start servers or download server packages** (Apache/PHP/MariaDB) on this machine. Test logic with unit
   tests, temp dirs (`tempfile`) and fake files instead.
 - Run Cargo from **PowerShell**, not Git Bash (Git Bash's `link.exe` shadows the MSVC linker):

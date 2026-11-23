@@ -1,0 +1,29 @@
+<!-- Windows Sandbox for testing Lampion: a throw-away Windows that is wiped when it closes.
+     Start it only through sandbox\run-sandbox.ps1 (it fills the in\ folder and writes the absolute paths). -->
+<Configuration>
+  <MemoryInMB>4096</MemoryInMB>
+  <vGPU>Disable</vGPU>
+  <Networking>Enable</Networking>
+  <AudioInput>Disable</AudioInput>
+  <VideoInput>Disable</VideoInput>
+  <PrinterRedirection>Disable</PrinterRedirection>
+  <ClipboardRedirection>Disable</ClipboardRedirection>
+  <ProtectedClient>Enable</ProtectedClient>
+  <MappedFolders>
+    <!-- The installer and the test script: read-only for the sandbox. -->
+    <MappedFolder>
+      <HostFolder>{{IN}}</HostFolder>
+      <SandboxFolder>C:\Users\WDAGUtilityAccount\Desktop\in</SandboxFolder>
+      <ReadOnly>true</ReadOnly>
+    </MappedFolder>
+    <!-- Results only (logs, screenshots): the one folder the sandbox may write to. -->
+    <MappedFolder>
+      <HostFolder>{{OUT}}</HostFolder>
+      <SandboxFolder>C:\Users\WDAGUtilityAccount\Desktop\out</SandboxFolder>
+      <ReadOnly>false</ReadOnly>
+    </MappedFolder>
+  </MappedFolders>
+  <LogonCommand>
+    <Command>powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Users\WDAGUtilityAccount\Desktop\in\inside.ps1</Command>
+  </LogonCommand>
+</Configuration>
