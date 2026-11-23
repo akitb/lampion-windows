@@ -478,16 +478,90 @@ fn install_package(root: &Path, p: &Package, n: usize, of: usize, downloads: &Pa
         let _ = std::fs::remove_dir_all(&partial);
         return Err(e);
     }
-    if target.exists() {
-        std::fs::remove_dir_all(&target)
-            .map_err(|e| format!("Could not replace {}: {e}. Close the programs that use it, then try again.", target.display()))?;
+    if let Err(e) = replace_package(&partial, &target, &kept_paths(root)) {
+        let _ = std::fs::remove_dir_all(&partial);
+        return Err(e);
     }
-    std::fs::rename(&partial, &target).map_err(|e| format!("Could not move {} into place: {e}", target.display()))?;
     if !package_ready(root, &p.id) {
         return Err(format!("The {title} package does not contain the expected files (the package list may name the wrong folder)."));
     }
     let _ = std::fs::remove_file(&archive);
     activity::ok("Setup", &format!("{title} is in {}", target.display()));
+    if p.id == "phpmyadmin" && !target.join("config.inc.php").is_file() {
+        // The user's earlier choice (a first setup gets the default from pma_default).
+        if let Some(on) = settings::get().phpmyadmin_auto_login {
+            if let Err(e) = crate::config::phpmyadmin::set_auto_login(on) {
+                activity::warn("Setup", &format!("phpMyAdmin's configuration could not be written again: {e}"));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// What the configuration keeps in the Lampion folder that may lie inside a package folder: MariaDB's
+/// data, the web folder, the log files and phpMyAdmin's config.inc.php.
+fn kept_paths(root: &Path) -> Vec<PathBuf> {
+    let l = crate::config::locations::current();
+    let mut keep = vec![datadir(root), l.document_root, l.apache_error_log, l.apache_access_log, root.join(r"bin\phpmyadmin\config.inc.php")];
+    keep.extend([l.mariadb_error_log, l.php_error_log, l.slow_query_log, l.general_query_log].into_iter().flatten());
+    keep
+}
+
+/// `p` below `dir`, ignoring case like Windows: the rest of the path (empty for `dir` itself).
+fn inside(p: &Path, dir: &Path) -> Option<PathBuf> {
+    let mut rest = p.components();
+    for c in dir.components() {
+        let same = rest.next().is_some_and(|r| r.as_os_str().to_string_lossy().eq_ignore_ascii_case(&c.as_os_str().to_string_lossy()));
+        if !same {
+            return None;
+        }
+    }
+    Some(rest.as_path().to_path_buf())
+}
+
+/// Puts a freshly unpacked package (`partial`) in place of `target`. An existing folder is renamed aside,
+/// never deleted outright: whatever of `keep` lies inside it moves into the new folder, and the old one
+/// is deleted only when nothing of that is left behind (else it stays next to it, and the log says so).
+fn replace_package(partial: &Path, target: &Path, keep: &[PathBuf]) -> Result<(), String> {
+    if !target.exists() {
+        return std::fs::rename(partial, target).map_err(|e| format!("Could not move {} into place: {e}", target.display()));
+    }
+    if let Some(p) = keep.iter().find(|p| inside(p, target).is_some_and(|rest| rest.as_os_str().is_empty())) {
+        return Err(format!("Lampion's configuration uses {} itself, so it cannot be replaced. Point that setting elsewhere, then try again.", p.display()));
+    }
+    let aside = PathBuf::from(format!("{}.old-{}", target.display(), chrono::Local::now().format("%Y%m%d-%H%M%S")));
+    std::fs::rename(target, &aside)
+        .map_err(|e| format!("Could not replace {}: {e}. Close the programs that use it, then try again.", target.display()))?;
+    if let Err(e) = std::fs::rename(partial, target) {
+        let _ = std::fs::rename(&aside, target);
+        return Err(format!("Could not move {} into place: {e}", target.display()));
+    }
+    let mut keep: Vec<&PathBuf> = keep.iter().collect();
+    keep.sort_by_key(|p| p.components().count()); // a folder before what is in it (a log in the data folder)
+    let mut left = Vec::new();
+    for rest in keep.into_iter().filter_map(|p| inside(p, target)) {
+        let (from, to) = (aside.join(&rest), target.join(&rest));
+        if !from.exists() {
+            continue;
+        }
+        let moved = (|| {
+            if to.is_dir() {
+                std::fs::remove_dir_all(&to)?; // the package's own copy (htdocs, say) gives way to the user's
+            } else if to.exists() {
+                std::fs::remove_file(&to)?;
+            }
+            std::fs::create_dir_all(to.parent().unwrap_or(target))?;
+            std::fs::rename(&from, &to)
+        })();
+        if let Err(e) = moved {
+            left.push(format!("{} ({e})", from.display()));
+        }
+    }
+    if !left.is_empty() {
+        activity::warn("Setup", &format!("Kept the old folder {}: it still holds {}", aside.display(), left.join(", ")));
+    } else if let Err(e) = std::fs::remove_dir_all(&aside) {
+        activity::warn("Setup", &format!("The old {} could not be deleted ({e}); delete it yourself.", aside.display()));
+    }
     Ok(())
 }
 
@@ -710,6 +784,54 @@ mod tests {
         assert!(write_new(&f, "first").unwrap());
         assert!(!write_new(&f, "second").unwrap(), "the user's file is never overwritten");
         assert_eq!(std::fs::read_to_string(&f).unwrap(), "first");
+    }
+
+    #[test]
+    fn a_repair_keeps_what_the_configuration_points_into() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("bin");
+        let (target, partial) = (bin.join("mariadb"), bin.join("mariadb.partial"));
+        let put = |p: PathBuf, text: &str| {
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, text).unwrap();
+        };
+        let read = |p: PathBuf| std::fs::read_to_string(p).unwrap();
+        put(target.join(r"bin\mariadbd.exe"), "old");
+        put(target.join(r"data\mysql\user.frm"), "my data");
+        put(target.join(r"data\PC.err"), "my log");
+        put(target.join(r"htdocs\index.php"), "my site");
+        put(partial.join(r"bin\mariadbd.exe"), "new");
+        put(partial.join(r"htdocs\index.html"), "the package's page");
+        let keep = [target.join(r"data\PC.err"), target.join("data"), target.join("HTDOCS"), dir.path().join(r"logs\x.log")];
+        replace_package(&partial, &target, &keep).unwrap();
+        assert_eq!(read(target.join(r"bin\mariadbd.exe")), "new");
+        assert_eq!(read(target.join(r"data\mysql\user.frm")), "my data");
+        assert_eq!(read(target.join(r"data\PC.err")), "my log");
+        assert_eq!(read(target.join(r"htdocs\index.php")), "my site");
+        assert!(!target.join(r"htdocs\index.html").exists(), "the user's folder, not the package's");
+        assert!(!partial.exists());
+        assert_eq!(std::fs::read_dir(&bin).unwrap().count(), 1, "the old folder goes once nothing in it is needed");
+
+        // A setting that names the package folder itself: nothing is touched.
+        put(partial.join(r"bin\mariadbd.exe"), "newer");
+        let itself = PathBuf::from(target.to_string_lossy().to_uppercase());
+        assert!(replace_package(&partial, &target, &[itself]).unwrap_err().contains("cannot be replaced"));
+        assert_eq!(read(target.join(r"bin\mariadbd.exe")), "new");
+        assert_eq!(read(target.join(r"data\mysql\user.frm")), "my data");
+
+        // Nothing there yet: the new folder simply moves in.
+        let fresh = bin.join("php");
+        replace_package(&partial, &fresh, &[]).unwrap();
+        assert_eq!(read(fresh.join(r"bin\mariadbd.exe")), "newer");
+    }
+
+    #[test]
+    fn paths_inside_folders_like_windows() {
+        let data = Path::new(r"C:\L\bin\mariadb\data\mysql");
+        assert_eq!(inside(data, Path::new(r"c:\l\BIN\mariadb")), Some(PathBuf::from(r"data\mysql")));
+        assert_eq!(inside(Path::new(r"C:\L\bin\mariadb"), Path::new(r"C:\L\bin\mariadb")), Some(PathBuf::new()));
+        assert_eq!(inside(Path::new(r"C:\L\bin\mariadb2\x"), Path::new(r"C:\L\bin\mariadb")), None);
+        assert_eq!(inside(Path::new(r"C:\L"), Path::new(r"C:\L\bin")), None);
     }
 
     #[test]
