@@ -45,9 +45,9 @@ fn positions_file(database: &str) -> PathBuf {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DesignerLoad {
-    schema: Schema,
+    pub schema: Schema,
     /// Where the user dragged the cards (empty: lay them out automatically).
-    positions: Positions,
+    pub positions: Positions,
 }
 
 /// The tables, columns and foreign keys of a database, and the card positions saved for it.
@@ -60,10 +60,10 @@ pub async fn db_designer_schema(database: String) -> Result<DesignerLoad, String
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RelationPreview {
-    sql: String,
+    pub sql: String,
     /// Problems MariaDB will most likely refuse, most important first.
-    warnings: Vec<String>,
-    suggested_name: String,
+    pub warnings: Vec<String>,
+    pub suggested_name: String,
 }
 
 /// What the relation sheet shows: the exact SQL (with `name`, or the suggested name when it is null),
