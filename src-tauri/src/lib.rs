@@ -92,6 +92,11 @@ pub fn run() {
             config::commands::config_open_at_login,
             config::commands::config_set_open_at_login,
             // ---- logs ----
+            logs::commands::logs_sources,
+            logs::commands::logs_follow,
+            logs::commands::logs_unfollow,
+            logs::commands::logs_reload,
+            logs::commands::logs_clear,
             // ---- database (data, query, sidebar) ----
             database::commands::db_connect,
             database::commands::db_set_password,
