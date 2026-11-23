@@ -37,7 +37,8 @@ in the screenshots (SF Symbols themselves may not be shipped on Windows). Put ne
 | config | `src-tauri/src/config/**` | `src/lib/pages/ApacheSettings.svelte`, `PhpSettings.svelte`, `MariadbSettings.svelte`, `GeneralSettings.svelte`, `src/lib/config/**` |
 | logs + app | `src-tauri/src/logs/**`, `src-tauri/src/app/**` except `quit.rs`, `src-tauri/icons/**`, `src-tauri/tauri.conf.json` bundle section, `.github/**`, `README.md`, `tools/**` | `src/lib/pages/LogsPage.svelte`, `src/lib/banners/UpdateBanner.svelte`, `src/lib/logs.svelte.ts`, `src/lib/logs/**`, `src/lib/updater/**` |
 | database A (data, query) | `src-tauri/src/database/commands.rs`, `src-tauri/src/database/data/**` | `src/routes/database/**`, `src/lib/db/**` except the files of part B |
-| database B (structure, designer) | `src-tauri/src/database/structure_commands.rs`, `src-tauri/src/database/structure/**` | `src/lib/db/StructureView.svelte`, `src/lib/db/DesignerView.svelte`, `src/lib/db/StructureSheets.svelte`, `src/lib/db/structure/**`, `src/lib/db/designer/**` |
+| database B1 (structure) | `src-tauri/src/database/structure_commands.rs`, `src-tauri/src/database/structure/**` | `src/lib/db/StructureView.svelte`, `src/lib/db/StructureSheets.svelte`, `src/lib/db/structure/**` |
+| database B2 (designer) | `src-tauri/src/database/designer_commands.rs`, `src-tauri/src/database/designer/**` | `src/lib/db/DesignerView.svelte`, `src/lib/db/designer/**` |
 
 Shared files you may only *append to* in your own marked place:
 - `src-tauri/src/lib.rs`: add your commands under your section comment in `generate_handler!`. Nothing else.
