@@ -141,8 +141,12 @@ export async function loadTables(d: string) {
     const info = await dbapi.tables(d);
     server.tables[d] = info.tables;
     ui.dbInfo[d] = { size: info.size, collation: info.collation };
-    // A table opened before its database's list arrived: now we know whether it is a view.
-    if (db.database === d && db.table) db.isView = !!info.tables.find((t) => t.name === db.table)?.view;
+    if (db.database === d && db.table) {
+      const t = info.tables.find((x) => x.name === db.table);
+      // A dropped table leaves its database selected; one opened before the list came learns if it is a view.
+      if (!t) select(d);
+      else db.isView = t.view;
+    }
   } catch (e) {
     if (!ui.connectionError) console.warn(message(e));
   }
