@@ -9,7 +9,7 @@
   import { contextMenu, type MenuItem } from "../menu.svelte";
   import { copy } from "../util";
   import Card from "./Card.svelte";
-  import { arrowPath, curvePath, linkPath, rowCenter, summary, toWorld, type Point } from "./diagram";
+  import { arrowPath, curvePath, linkPath, revealPan, rowCenter, summary, toWorld, type Point } from "./diagram";
   import type { DesignerStore } from "./store.svelte";
 
   let { store, database }: { store: DesignerStore; database: string } = $props();
@@ -234,6 +234,14 @@
       open(t, "structure");
     }
   }
+
+  /** A card reached with Tab comes into view by panning (a click on a card leaves the view where it is). */
+  function reveal(e: FocusEvent) {
+    const card = e.target as HTMLElement;
+    const f = card.matches(":focus-visible") ? store.frame(card.dataset.table ?? "") : undefined;
+    const p = f && revealPan(v, f, store.size);
+    if (p) store.setPan(p);
+  }
 </script>
 
 <!-- Pointer work on the drawing; for the keyboard, the cards are buttons. -->
@@ -254,6 +262,8 @@
   ondblclick={doubleClick}
   oncontextmenu={menu}
   onkeydown={key}
+  onfocusin={reveal}
+  onscroll={(e) => e.currentTarget.scrollTo(0, 0)}
 >
   <div class="world" class:moving style="transform: translate({v.pan.x}px, {v.pan.y}px) scale({v.zoom})">
     <svg class="lines" aria-hidden="true" style="--z: {v.zoom}">
@@ -316,7 +326,10 @@
     position: relative;
     flex: 1;
     min-height: 0;
+    /* Never scrolled, not even to show a focused card: the pointer's hit tests assume the world sits at the origin.
+       `hidden` (and the reset on scroll) only for a WebView without `clip`. */
     overflow: hidden;
+    overflow: clip;
     background-color: var(--db-content);
     background-image: radial-gradient(circle, var(--dz-dot) 0.9px, transparent 1.4px);
     outline: none;

@@ -574,6 +574,19 @@ export function zoomView(v: View, value: number, anchor: Point | null, size: Siz
   return { zoom, pan: clampPan({ x: a.x - w.x * zoom, y: a.y - w.y * zoom }, zoom, size, content) };
 }
 
+/** The pan that brings `r` fully on screen with a 24 px margin, moving as little as possible (its top left first
+ *  when it does not fit); null when it is on screen already. */
+export function revealPan(v: View, r: Rect, size: Size): Point | null {
+  const m = 24;
+  const axis = (pan: number, start: number, length: number, room: number) => {
+    const a = start * v.zoom + pan, b = a + length * v.zoom;
+    if (a >= 0 && b <= room) return pan;
+    return a < 0 || b - a > room - 2 * m ? pan + m - a : pan + room - m - b;
+  };
+  const x = axis(v.pan.x, r.x, r.w, size.w), y = axis(v.pan.y, r.y, r.h, size.h);
+  return x === v.pan.x && y === v.pan.y ? null : { x, y };
+}
+
 /** Shows all of `rect` with a 28 px margin, at most at 100 %; null while the canvas has no real size. */
 export function fitView(rect: Rect | null, size: Size): View | null {
   if (!rect || size.w <= 40 || size.h <= 40) return null;

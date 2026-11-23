@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import {
   arrowPath, autoLayout, cardLayout, clampPan, columnAt, compactType, countText, curveDistance, curvePoint, dropSql,
   emphasis, explain, fitView, linkPath, linkRelation, Loader, METRICS, placed, relationAt, relationColumns, relationCurves,
-  relationId, rowCenter, rowHelp, sqlTokens, summary, tableAt, toWorld, typeFamily, zoomView, ZOOM,
+  relationId, revealPan, rowCenter, rowHelp, sqlTokens, summary, tableAt, toWorld, typeFamily, zoomView, ZOOM,
 } from "./diagram.ts";
 
 const col = (name, type = "int(10) unsigned", key = "", nullable = false) => ({ name, type, key, nullable });
@@ -278,6 +278,20 @@ test("zoom keeps the point under the pointer, fit shows everything at most at 10
 
   const kept = clampPan({ x: -5000, y: 5000 }, 1, size, content);
   assert.deepEqual(kept, { x: 120 - 2000, y: 600 - 120 }, "a strip of the diagram stays on screen");
+});
+
+test("a card reached with Tab is panned into view, as little as needed", () => {
+  const size = { w: 800, h: 600 };
+  const v = { zoom: 0.5, pan: { x: 10, y: 20 } };
+  assert.equal(revealPan(v, { x: 100, y: 100, w: 200, h: 100 }, size), null, "on screen: the view stays");
+  // Off to the right and below: its right and bottom edges come in 24 px from the canvas edge.
+  const p = revealPan(v, { x: 1600, y: 1200, w: 200, h: 100 }, size);
+  assert.deepEqual(p, { x: 800 - 24 - 1800 * 0.5, y: 600 - 24 - 1300 * 0.5 });
+  // Partly off to the left: only x changes, its left edge comes in 24 px.
+  assert.deepEqual(revealPan(v, { x: -40, y: 100, w: 200, h: 100 }, size), { x: 24 + 20, y: 20 });
+  // Taller than the canvas: its top shows.
+  const tall = revealPan({ zoom: 2, pan: { x: 0, y: 0 } }, { x: 10, y: 10, w: 100, h: 400 }, size);
+  assert.deepEqual(tall, { x: 0, y: 24 - 20 });
 });
 
 test("the loader shows the cache at once, reads once, and drops stale answers", async () => {
