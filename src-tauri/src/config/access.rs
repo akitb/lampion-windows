@@ -19,15 +19,27 @@ const ENABLE: &[&str] = &[
     "FLUSH PRIVILEGES",
 ];
 
-/// Turning it off: every local root account gets the password.
+/// `literal()` escapes with backslashes; under NO_BACKSLASH_ESCAPES root would get another password.
+const BACKSLASH_ESCAPES: &str = "SET SESSION sql_mode = REPLACE(@@sql_mode, 'NO_BACKSLASH_ESCAPES', '')";
+
+/// Turning it off: every local root account gets the password (on a connection that reads `\` as an escape).
 fn disable(password: &str) -> Vec<String> {
     let pw = client::literal(password);
-    let mut sql: Vec<String> = ["localhost", "127.0.0.1", "::1"]
-        .iter()
-        .map(|host| format!("ALTER USER IF EXISTS 'root'@'{host}' IDENTIFIED BY {pw}"))
-        .collect();
+    let mut sql = vec![BACKSLASH_ESCAPES.to_string()];
+    sql.extend(["localhost", "127.0.0.1", "::1"].iter().map(|host| format!("ALTER USER IF EXISTS 'root'@'{host}' IDENTIFIED BY {pw}")));
     sql.push("FLUSH PRIVILEGES".into());
     sql
+}
+
+/// A MariaDB error about a password statement, without the password (a syntax error quotes the statement).
+fn hide(error: String, password: &str) -> String {
+    let escaped = client::literal(password);
+    let quoted = !password.is_empty() && (error.contains(password) || error.contains(&escaped[1..escaped.len() - 1]));
+    match error.find("): ") {
+        Some(i) if quoted => format!("{}: MariaDB's message quoted the password, so it is not shown.", &error[..=i]),
+        _ if quoted => "MariaDB refused the new password.".into(),
+        _ => error,
+    }
 }
 
 /// Some(true) = root logs in with an empty password over TCP; Some(false) = refused (1045/1698);
@@ -73,7 +85,7 @@ pub async fn set_root_no_password(enabled: bool, password: Option<String>) -> Re
         // Straight on the connection, not through client::query: the SQL console must not show the password.
         let mut conn = client::conn().await.map_err(refused)?;
         for sql in disable(&pw) {
-            conn.query_drop(sql).await.map_err(|e| refused(client::err(e)))?;
+            conn.query_drop(sql).await.map_err(|e| refused(hide(client::err(e), &pw)))?;
         }
         drop(conn);
         client::configure(port, Some(pw));
@@ -120,11 +132,21 @@ mod tests {
             assert!(!sql.contains("'%'"), "{sql}");
         }
         assert_eq!(disable("it's"), [
+            "SET SESSION sql_mode = REPLACE(@@sql_mode, 'NO_BACKSLASH_ESCAPES', '')",
             r"ALTER USER IF EXISTS 'root'@'localhost' IDENTIFIED BY 'it\'s'",
             r"ALTER USER IF EXISTS 'root'@'127.0.0.1' IDENTIFIED BY 'it\'s'",
             r"ALTER USER IF EXISTS 'root'@'::1' IDENTIFIED BY 'it\'s'",
             "FLUSH PRIVILEGES",
         ]);
+    }
+
+    #[test]
+    fn password_errors_never_show_the_password() {
+        let syntax = r"ERROR 1064 (42000): You have an error in your SQL syntax; check the manual near ''s3\'cr\\et'' at line 1";
+        assert_eq!(hide(syntax.into(), r"s3'cr\et"), "ERROR 1064 (42000): MariaDB's message quoted the password, so it is not shown.");
+        assert_eq!(hide("near 'hunter2'".into(), "hunter2"), "MariaDB refused the new password.");
+        let plain = "ERROR 1396 (HY000): Operation ALTER USER failed for 'root'@'::1'";
+        assert_eq!(hide(plain.into(), "hunter2"), plain, "other errors are shown as they are");
     }
 
     #[test]
