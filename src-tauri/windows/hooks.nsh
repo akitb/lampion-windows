@@ -4,7 +4,8 @@
 ;   %LOCALAPPDATA%\Lampion, is the folder of Lampion's own log, settings caches and downloaded updates.
 ; - Offers the Microsoft Visual C++ 2015-2022 runtime (x64) that Apache and PHP need, when it is missing
 ;   (not during an update). Lampion's first setup offers it again if it was declined here.
-; - Uninstalling says that the Lampion folder (C:\Lampion: servers, websites, databases) is kept.
+; - Uninstalling removes the LampionApache and LampionMariaDB Windows services, if they were installed, and
+;   says that the Lampion folder (C:\Lampion: servers, websites, databases) is kept.
 ;
 ; The updater runs the installer as `Lampion-X.Y-setup.exe /S /UPDATE /R`: silent, no new shortcuts, and
 ; Tauri's template starts Lampion again when it is done (/R).
@@ -54,7 +55,22 @@ FunctionEnd
 
 !macro NSIS_HOOK_PREUNINSTALL
   ${If} $UpdateMode <> 1
-  ${AndIf} $PassiveMode <> 1
-    MessageBox MB_OK|MB_ICONINFORMATION "Lampion's folder with your servers, websites and databases is kept: C:\Lampion, or the folder you moved it to.$\r$\n$\r$\nServers that are still running keep running until you restart Windows. Delete the folder yourself when you no longer need it." /SD IDOK
+    ; General › Run the servers as Windows services: the services LampionApache and LampionMariaDB start
+    ; with Windows from the Lampion folder, so they go with Lampion (one Windows permission prompt; not
+    ; in a silent uninstall, which nobody could answer).
+    ClearErrors
+    ReadRegStr $0 HKLM "SYSTEM\CurrentControlSet\Services\LampionApache" "ImagePath"
+    ${If} ${Errors}
+      ClearErrors
+      ReadRegStr $0 HKLM "SYSTEM\CurrentControlSet\Services\LampionMariaDB" "ImagePath"
+    ${EndIf}
+    ${IfNot} ${Errors}
+    ${AndIfNot} ${Silent}
+      DetailPrint "Removing the LampionApache and LampionMariaDB services (Windows asks for permission)..."
+      ExecShellWait "runas" "$SYSDIR\cmd.exe" '/d /c "sc.exe stop LampionApache & sc.exe delete LampionApache & sc.exe stop LampionMariaDB & sc.exe delete LampionMariaDB"' SW_HIDE
+    ${EndIf}
+    ${If} $PassiveMode <> 1
+      MessageBox MB_OK|MB_ICONINFORMATION "Lampion's folder with your servers, websites and databases is kept: C:\Lampion, or the folder you moved it to.$\r$\n$\r$\nApache and MariaDB no longer start with Windows; if they are running now, they stop when you restart Windows. Delete the folder yourself when you no longer need it." /SD IDOK
+    ${EndIf}
   ${EndIf}
 !macroend
