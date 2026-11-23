@@ -1,6 +1,7 @@
 //! root without a password from this computer only (TCP 127.0.0.1 / ::1 / localhost), and the
 //! ready-made connection settings of the "Connecting from apps" card. Never creates root@'%'.
 
+use super::secret;
 use crate::core::{activity, settings};
 use crate::database::client;
 use mysql_async::prelude::Queryable;
@@ -65,6 +66,20 @@ fn refused(e: String) -> String {
     format!("MariaDB did not accept the change. Is it running?\n\n{e}")
 }
 
+/// Keeps root's password for the next launch (encrypted), or forgets it.
+fn keep_password(password: Option<&str>) {
+    if let Err(e) = secret::save(password) {
+        activity::warn("MySQL", &e);
+    }
+}
+
+/// At launch: the root password the user set earlier, so Lampion still connects and stops MariaDB in order.
+pub fn restore_saved_password() {
+    if let Some(pw) = secret::load() {
+        client::configure(client::port(), Some(pw));
+    }
+}
+
 /// Turns password-less root on, or off with `password` as the new root password. When turning it on
 /// while root has a password the app does not know, `password` is the current one.
 /// Never creates root@'%'.
@@ -79,6 +94,7 @@ pub async fn set_root_no_password(enabled: bool, password: Option<String>) -> Re
             client::query(sql).await.map_err(refused)?;
         }
         client::configure(port, None);
+        keep_password(None);
         activity::ok("MySQL", "root can now log in without a password, from this computer only");
     } else {
         let pw = password.ok_or("Enter a password for root.")?;
@@ -88,6 +104,7 @@ pub async fn set_root_no_password(enabled: bool, password: Option<String>) -> Re
             conn.query_drop(sql).await.map_err(|e| refused(hide(client::err(e), &pw)))?;
         }
         drop(conn);
+        keep_password(Some(&pw));
         client::configure(port, Some(pw));
         activity::ok("MySQL", "root without a password is turned off; root now needs its password");
     }

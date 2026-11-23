@@ -71,6 +71,8 @@ impl Server {
 }
 
 pub fn init(_app: &tauri::AppHandle) {
+    // Before the monitor starts: it moves the client to MariaDB's port and keeps this password.
+    crate::config::access::restore_saved_password();
     quiet_errors();
     setup::init();
     monitor::start();

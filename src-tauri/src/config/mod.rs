@@ -12,6 +12,7 @@ pub mod locations;
 pub mod mariadb;
 pub mod php;
 pub mod phpmyadmin;
+pub mod secret;
 pub mod timezones;
 
 /// Hand edits of httpd.conf / my.ini / php.ini: the ports and folders are read again every 10 s and

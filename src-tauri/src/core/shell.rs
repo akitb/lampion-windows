@@ -41,7 +41,13 @@ pub fn run(program: impl AsRef<Path>, args: &[&str]) -> Output {
 /// Like `run`, but kills the program after `timeout`.
 pub fn run_timeout(program: impl AsRef<Path>, args: &[&str], timeout: Duration) -> Output {
     let mut cmd = command(program);
-    cmd.args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    cmd.args(args);
+    output(cmd, timeout)
+}
+
+/// Runs a `command()` set up by the caller (e.g. with an environment variable) like `run_timeout`.
+pub fn output(mut cmd: Command, timeout: Duration) -> Output {
+    cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => return Output { status: -1, out: e.to_string() },

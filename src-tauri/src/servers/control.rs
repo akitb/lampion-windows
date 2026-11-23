@@ -19,8 +19,10 @@ pub const POLL: Duration = Duration::from_millis(500);
 pub const START_TRIES: usize = 24;
 /// A started server must still run with the same PID after this long.
 pub const SETTLE: Duration = Duration::from_millis(2500);
-/// 30 s for an orderly stop.
+/// 30 s for Apache to stop in order.
 const STOP_TRIES: usize = 60;
+/// 60 s for MariaDB: InnoDB writes its buffers out before it exits, which can take a while.
+const MARIADB_STOP_TRIES: usize = 120;
 
 type Job = Box<dyn FnOnce() + Send>;
 
@@ -251,10 +253,20 @@ fn halt(s: Server, p: &Probe) -> bool {
         match s {
             // mpm_winnt's parent waits on the event "ap<PID>_shutdown" (the PID in httpd.pid) and stops its child.
             Server::Apache => p.pids.first().is_some_and(|pid| probe::signal_event(&format!("ap{pid}_shutdown"))),
-            Server::Mariadb => mariadb_shutdown(),
+            Server::Mariadb => mariadb_shutdown(p),
         }
     };
-    if asked && await_stop(probe_now, std::thread::sleep, STOP_TRIES) {
+    // MariaDB always gets its time before any force (InnoDB may still be writing); Apache when asked.
+    let tries = match s {
+        Server::Mariadb => MARIADB_STOP_TRIES,
+        Server::Apache if asked => STOP_TRIES,
+        Server::Apache => 0,
+    };
+    if !asked && s == Server::Mariadb {
+        activity::warn(m, "MariaDB could not be asked to stop; waiting up to 60 s before ending it by force.");
+    }
+    let waited = |secs: u64| activity::info(m, &format!("Still stopping… ({secs} s)"));
+    if await_stop(probe_now, std::thread::sleep, tries, waited) {
         return true;
     }
     let left = probe_now();
@@ -270,14 +282,21 @@ fn halt(s: Server, p: &Probe) -> bool {
     for pid in left.pids.iter().rev() {
         probe::kill(*pid);
     }
-    await_stop(probe_now, std::thread::sleep, 10)
+    await_stop(probe_now, std::thread::sleep, 10, |_| {})
 }
 
-/// `mariadb-admin shutdown`, or, when root has a password now, `SHUTDOWN` over Lampion's own connection.
-fn mariadb_shutdown() -> bool {
-    let port = format!("--port={}", locations::current().mariadb_port);
-    let args = ["--no-defaults", "--protocol=TCP", "--host=127.0.0.1", &port, "--user=root", "--password=", "--connect-timeout=5", "shutdown"];
-    let out = shell::run_timeout(paths::mariadb_admin_exe(), &args, Duration::from_secs(60));
+/// Asks MariaDB to stop in order: its own shutdown event `MySQLShutdown<PID>` (MariaDB's
+/// sql/handle_connections_win.cc; no password needed), else `mariadb-admin shutdown` on the port it
+/// listens on with root's password when Lampion knows it, else `SHUTDOWN` over Lampion's connection.
+fn mariadb_shutdown(p: &Probe) -> bool {
+    if p.pids.first().is_some_and(|pid| probe::signal_event(&format!("MySQLShutdown{pid}"))) {
+        return true;
+    }
+    let port = answering_port(p, locations::current().mariadb_port);
+    let mut admin = shell::command(paths::mariadb_admin_exe());
+    // MYSQL_PWD rather than --password: every program can read a command line.
+    admin.args(admin_args(port)).env("MYSQL_PWD", crate::database::client::password().unwrap_or_default());
+    let out = shell::output(admin, Duration::from_secs(60));
     if out.ok() {
         return true;
     }
@@ -288,6 +307,22 @@ fn mariadb_shutdown() -> bool {
     let why = out.out.lines().map(str::trim).filter(|l| !l.is_empty()).last().unwrap_or("no answer").to_string();
     activity::warn("MySQL", &format!("mariadb-admin could not shut MariaDB down: {why}"));
     false
+}
+
+/// `mariadb-admin shutdown` on `port` (the password comes from MYSQL_PWD, never the command line).
+pub fn admin_args(port: u16) -> Vec<String> {
+    let port = format!("--port={port}");
+    ["--no-defaults", "--protocol=TCP", "--host=127.0.0.1", &port, "--user=root", "--connect-timeout=5", "shutdown"].map(String::from).to_vec()
+}
+
+/// The port MariaDB answers on: the configured one when it listens there, else the one it listens on
+/// (my.ini changed, restart pending), else the configured one (stopped).
+pub fn answering_port(p: &Probe, configured: u16) -> u16 {
+    if p.ports.contains(&configured) {
+        configured
+    } else {
+        p.ports.first().copied().unwrap_or(configured)
+    }
 }
 
 fn launch(s: Server) -> Result<(), String> {
@@ -476,11 +511,15 @@ pub fn await_start(mut probe: impl FnMut() -> Probe, mut sleep: impl FnMut(Durat
     Err(last)
 }
 
-/// Polls every 0.5 s until the server is gone; false after `tries` looks.
-pub fn await_stop(mut probe: impl FnMut() -> Probe, mut sleep: impl FnMut(Duration), tries: usize) -> bool {
+/// Polls every 0.5 s until the server is gone; false after `tries` looks. `waited(seconds)` hears
+/// every 10 s that it is still there.
+pub fn await_stop(mut probe: impl FnMut() -> Probe, mut sleep: impl FnMut(Duration), tries: usize, mut waited: impl FnMut(u64)) -> bool {
     for i in 0..tries {
         if !probe().running {
             return true;
+        }
+        if i > 0 && i % 20 == 0 {
+            waited(i as u64 / 2);
         }
         if i + 1 < tries {
             sleep(POLL);
@@ -560,11 +599,35 @@ mod tests {
     #[test]
     fn stop_waits() {
         let (probe, waits) = script(vec![up(7), up(7), Probe::default()]);
-        assert!(await_stop(probe, |d| waits.borrow_mut().push(d), 10));
+        assert!(await_stop(probe, |d| waits.borrow_mut().push(d), 10, |_| {}));
         assert_eq!(waits.borrow().len(), 2);
         let (probe, waits) = script(vec![up(7)]);
-        assert!(!await_stop(probe, |d| waits.borrow_mut().push(d), 4));
+        assert!(!await_stop(probe, |d| waits.borrow_mut().push(d), 4, |_| {}));
         assert_eq!(waits.borrow().len(), 3);
+        let (probe, _) = script(vec![up(7)]);
+        assert!(!await_stop(probe, |_| {}, 0, |_| {}), "no time at all: not stopped");
+    }
+
+    #[test]
+    fn mariadb_gets_a_minute_and_progress_every_ten_seconds() {
+        let (probe, waits) = script(vec![up(7)]);
+        let reports = RefCell::new(Vec::new());
+        assert!(!await_stop(probe, |d| waits.borrow_mut().push(d), MARIADB_STOP_TRIES, |s| reports.borrow_mut().push(s)));
+        let total: Duration = waits.borrow().iter().sum();
+        assert!(total >= Duration::from_secs(59), "{total:?}");
+        assert_eq!(*reports.borrow(), [10, 20, 30, 40, 50]);
+    }
+
+    #[test]
+    fn mariadb_is_asked_on_the_port_it_answers_without_a_password_on_the_command_line() {
+        let maria = |ports: Vec<u16>| Probe { running: !ports.is_empty(), pids: vec![9], ports };
+        assert_eq!(answering_port(&maria(vec![3306]), 3307), 3306, "my.ini says 3307, MariaDB still listens on 3306");
+        assert_eq!(answering_port(&maria(vec![3306, 3307]), 3307), 3307);
+        assert_eq!(answering_port(&maria(vec![]), 3307), 3307, "stopped: the configured port");
+        let args = admin_args(3306);
+        assert_eq!(args[0], "--no-defaults", "must come first");
+        assert!(args.contains(&"--port=3306".to_string()) && args.last().unwrap() == "shutdown");
+        assert!(!args.iter().any(|a| a.starts_with("--password") || a.starts_with("-p")), "{args:?}");
     }
 
     #[test]
