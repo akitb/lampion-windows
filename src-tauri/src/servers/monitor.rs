@@ -1,7 +1,8 @@
 //! Watches the servers every 2 s and tells the UI (`servers://status`) only when something really changed
 //! (an unchanged status sent every tick made the macOS window stutter). Logs "Stopped unexpectedly" with
 //! the last error lines of the server's log, and "Started (externally)". Re-reads the configured ports
-//! every 10 s, so hand edits of httpd.conf / my.ini show up, and points the database client at MariaDB's port.
+//! every 10 s, so hand edits of httpd.conf / my.ini show up, and points the database client and
+//! phpMyAdmin at the port MariaDB answers on.
 
 use super::probe::{Probe, Snapshot};
 use super::{control, Server};
@@ -9,6 +10,7 @@ use crate::config::locations;
 use crate::core::{activity, emit, shell};
 use once_cell::sync::Lazy;
 use serde::Serialize;
+use std::sync::atomic::{AtomicU16, Ordering::SeqCst};
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -248,7 +250,7 @@ fn check(finished: &[Server], reread_ports: bool) {
         emit("servers://status", st);
     }
     if let Some([_, maria]) = ports {
-        point_client_at(maria);
+        follow_mariadb(control::answering_port(&probes[Server::Mariadb.index()], maria));
     }
     if probes[Server::Mariadb.index()].running {
         super::setup::on_mariadb_running();
@@ -259,11 +261,27 @@ fn check(finished: &[Server], reread_ports: bool) {
     }
 }
 
-/// The database client follows MariaDB's port, keeping a root password the user set.
-fn point_client_at(port: u16) {
+/// The database client (keeping a root password the user set) and phpMyAdmin follow the port MariaDB
+/// answers on: a port saved in my.ini applies only once MariaDB has restarted.
+fn follow_mariadb(port: u16) {
     if crate::database::client::port() != port {
         // `set_port` may close the old pool on the async runtime, so it must run there.
         tauri::async_runtime::spawn(async move { crate::database::client::set_port(port) });
+    }
+    // A failed change (phpMyAdmin's config rejected by `php -l`) is not retried every 10 s.
+    static FAILED_FOR: AtomicU16 = AtomicU16::new(0);
+    use crate::config::phpmyadmin;
+    if phpmyadmin::configured_port().is_some_and(|p| p != port) && FAILED_FOR.load(SeqCst) != port {
+        match phpmyadmin::sync_port(port) {
+            Ok(_) => {
+                FAILED_FOR.store(0, SeqCst);
+                activity::info("MySQL", &format!("phpMyAdmin now connects to port {port}"));
+            }
+            Err(e) => {
+                FAILED_FOR.store(port, SeqCst);
+                activity::warn("MySQL", &format!("phpMyAdmin could not be pointed at port {port}: {}", e.lines().next().unwrap_or("")));
+            }
+        }
     }
 }
 

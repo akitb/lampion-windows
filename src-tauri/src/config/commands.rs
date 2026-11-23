@@ -195,16 +195,9 @@ pub async fn config_mariadb_save(saved: MariadbSettings, draft: MariadbSettings)
         if let Some(r) = refused(mariadb::validate(&draft)) {
             return Ok(r);
         }
-        let port_before = locations::current().mariadb_port;
         let logs = paths::logs().join("mariadb");
+        // A new port reaches phpMyAdmin and the database client once MariaDB listens on it (servers::monitor).
         let result = mariadb::save(&paths::my_ini(), &saved, &draft, &file::run_real, &logs.join("slow.log"), &logs.join("general.log"));
-        let port = locations::current().mariadb_port;
-        if result.is_ok() && port != port_before {
-            // phpMyAdmin connects over TCP, so it has to follow the port.
-            if let Err(e) = phpmyadmin::sync_port(port) {
-                activity::warn("MySQL", &format!("phpMyAdmin still uses port {port_before}: {}", e.lines().next().unwrap_or("")));
-            }
-        }
         logged("MySQL", result)
     })
     .await?

@@ -135,6 +135,20 @@ pub fn set_auto_login(enabled: bool) -> Result<(), String> {
     Ok(())
 }
 
+/// The MariaDB port config.inc.php names (MariaDB's 3306 when it names none).
+pub fn port_in(text: &str) -> u16 {
+    let doc = Doc::new(text);
+    server_line(&doc, "port")
+        .and_then(|i| doc.line(i).split_once('=').map(|(_, v)| v.trim().trim_end_matches(';').trim().trim_matches(['\'', '"']).parse().ok()))
+        .flatten()
+        .unwrap_or(3306)
+}
+
+/// The port phpMyAdmin connects to now; `None` when config.inc.php is missing.
+pub fn configured_port() -> Option<u16> {
+    file::read(&paths::pma_config()).ok().map(|t| port_in(&t))
+}
+
 /// Points phpMyAdmin at MariaDB's port after it changed (only when config.inc.php exists).
 pub fn sync_port(port: u16) -> Result<bool, String> {
     let dir = paths::phpmyadmin_dir();
@@ -182,6 +196,8 @@ $cfg['Servers'][$i]['AllowNoPassword'] = true;\r\n"
         assert!(on.contains("$cfg['Servers'][$i]['host'] = '127.0.0.1';\r\n$cfg['Servers'][$i]['port'] = '3307';\r\n"));
         let back = apply(&on, None, 3306);
         assert!(back.contains("['port'] = '3306';") && is_auto_login(&back), "only the port changed");
+        assert_eq!((port_in(&on), port_in(&back), port_in(SAMPLE)), (3307, 3306, 3306), "no port line: MariaDB's default");
+        assert_eq!(port_in("<?php\n$cfg['Servers'][$i]['port'] = \"3308\" ;\n"), 3308);
     }
 
     #[test]
