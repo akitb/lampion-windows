@@ -1,8 +1,10 @@
 //! Start, stop and restart (SPEC "Indítás", "Leállítás", Panel.swift), one action at a time on a serial
 //! queue. Start: config test (Apache), a free port (naming the program that holds it), launch, wait up to
 //! 12 s for the port, then 2.5 s later the same PID must still run; otherwise it is stopped and the last
-//! error lines of its log are shown. Stop: MariaDB through `mariadb-admin shutdown` (InnoDB stays
-//! consistent), Apache through its shutdown event (parent and child), force only as the last resort.
+//! error lines of its log are shown. A MariaDB that is recovering its data gets up to 5 minutes and is
+//! never stopped in the middle of it. Stop: MariaDB through its shutdown event (else `mariadb-admin
+//! shutdown`; InnoDB stays consistent) with 60 s before any force, Apache through its shutdown event
+//! (parent and child), force only as the last resort.
 
 use super::probe::{self, Probe, Snapshot};
 use super::{configs, monitor, services, Server};
@@ -174,7 +176,22 @@ pub(super) fn op_start(s: Server) -> Result<(), String> {
     let log = error_log(s, &l);
     let offset = std::fs::metadata(&log).map(|m| m.len()).unwrap_or(0);
     launch(s)?;
-    match await_start(|| Snapshot::take().probe(s), std::thread::sleep) {
+    let mut started = await_start(|| Snapshot::take().probe(s), std::thread::sleep);
+    if matches!(&started, Err(last) if s == Server::Mariadb && last.running && recovering(&read_since(&log, offset))) {
+        activity::info(m, "MariaDB is recovering its data after an unclean stop; waiting for it (up to 5 minutes)…");
+        let report = |secs: u64, line: Option<String>| match line {
+            Some(line) => activity::info(m, &format!("Still recovering ({secs} s): {line}")),
+            None => activity::info(m, &format!("Still recovering… ({secs} s)")),
+        };
+        started = await_recovery(|| Snapshot::take().probe(s), || read_since(&log, offset), std::thread::sleep, report);
+        if matches!(&started, Err(last) if last.running) {
+            // Never ended by force in the middle of a recovery: it would have to start all over again.
+            let text = "MariaDB is still recovering its data and keeps starting in the background. Logs › MariaDB shows its progress.";
+            activity::warn(m, text);
+            return Err(text.into());
+        }
+    }
+    match started {
         Ok(p) => {
             let pid = p.pids.first().map(u32::to_string).unwrap_or_else(|| "?".into());
             activity::ok(m, &format!("Started – PID: {pid}, port: {}", ports_text(&p.ports)));
@@ -511,6 +528,53 @@ pub fn await_start(mut probe: impl FnMut() -> Probe, mut sleep: impl FnMut(Durat
     Err(last)
 }
 
+/// How long a MariaDB that recovers its data (after a crash or a forced stop) may take to start.
+pub const RECOVERY_LIMIT: Duration = Duration::from_secs(300);
+
+/// MariaDB's log says it is recovering (InnoDB's "Starting crash recovery", "To recover: N pages",
+/// "Parsed redo log up to LSN"; Aria's "starting recovery"), so starting takes longer than usual.
+pub fn recovering(log: &str) -> bool {
+    log.lines().any(|l| progress(l).is_some())
+}
+
+/// A recovery progress line without its time and level: "InnoDB: To recover: 1234 pages".
+fn progress(line: &str) -> Option<&str> {
+    const MARKS: [&str; 6] = ["crash recovery", "to recover:", "redo log up to", "batch recovery", "starting recovery", "recovered pages"];
+    let lower = line.to_ascii_lowercase();
+    MARKS.iter().any(|m| lower.contains(m)).then(|| line.split_once("] ").map_or(line, |(_, rest)| rest).trim())
+}
+
+/// After the normal 12 s, while MariaDB recovers: polls every 0.5 s (at most `RECOVERY_LIMIT`) until it
+/// listens and is stable, or dies. `report(seconds, newest progress line)` is called every 15 s.
+/// `Ok` with the final look; `Err` with the last one (still running = still recovering).
+pub fn await_recovery(
+    mut probe: impl FnMut() -> Probe,
+    mut log: impl FnMut() -> String,
+    mut sleep: impl FnMut(Duration),
+    mut report: impl FnMut(u64, Option<String>),
+) -> Result<Probe, Probe> {
+    let tries = (RECOVERY_LIMIT.as_millis() / POLL.as_millis()) as usize;
+    let mut last = Probe::default();
+    for i in 0..tries {
+        last = probe();
+        match start_step(&last, START_TRIES + i) {
+            StartStep::Listening => {
+                sleep(SETTLE);
+                let again = probe();
+                return if stable(&last, &again) { Ok(again) } else { Err(again) };
+            }
+            StartStep::Died => return Err(last),
+            StartStep::Wait if i > 0 && i % 30 == 0 => {
+                let text = log();
+                report((START_TRIES + i) as u64 / 2, text.lines().rev().find_map(progress).map(String::from));
+            }
+            StartStep::Wait => {}
+        }
+        sleep(POLL);
+    }
+    Err(last)
+}
+
 /// Polls every 0.5 s until the server is gone; false after `tries` looks. `waited(seconds)` hears
 /// every 10 s that it is still there.
 pub fn await_stop(mut probe: impl FnMut() -> Probe, mut sleep: impl FnMut(Duration), tries: usize, mut waited: impl FnMut(u64)) -> bool {
@@ -606,6 +670,39 @@ mod tests {
         assert_eq!(waits.borrow().len(), 3);
         let (probe, _) = script(vec![up(7)]);
         assert!(!await_stop(probe, |_| {}, 0, |_| {}), "no time at all: not stopped");
+    }
+
+    const RECOVERY_LOG: &str = "2026-11-23 10:00:00 0 [Note] InnoDB: Completed initialization of buffer pool\n\
+        2026-11-23 10:00:00 0 [Note] InnoDB: Starting crash recovery from checkpoint LSN=46846\n\
+        2026-11-23 10:00:15 0 [Note] InnoDB: To recover: 1234 pages\n";
+
+    #[test]
+    fn recovery_is_recognised_from_the_log() {
+        assert!(recovering(RECOVERY_LOG));
+        assert!(recovering("2026-11-23 10:00:15 0 [Note] InnoDB: Parsed redo log up to LSN=99; to recover: 7 pages"));
+        let normal = "2026-11-23 10:00:00 0 [Note] InnoDB: 128 rollback segments in 3 undo tablespaces are active.\n\
+                      2026-11-23 10:00:00 0 [Note] InnoDB: log sequence number 46846; transaction id 14\n";
+        assert!(!recovering(normal), "a normal start is not a recovery");
+        assert_eq!(RECOVERY_LOG.lines().rev().find_map(progress), Some("InnoDB: To recover: 1234 pages"));
+    }
+
+    #[test]
+    fn a_recovering_mariadb_is_waited_for() {
+        let mut looks = vec![not_listening(7); 200];
+        looks.extend([up(7), up(7)]);
+        let (probe, waits) = script(looks);
+        let reports = RefCell::new(Vec::new());
+        let r = await_recovery(probe, || RECOVERY_LOG.to_string(), |d| waits.borrow_mut().push(d), |s, l| reports.borrow_mut().push((s, l)));
+        assert_eq!(r, Ok(up(7)), "listening after 100 s more");
+        assert_eq!(reports.borrow().len(), 6, "every 15 s");
+        assert_eq!(reports.borrow()[0], (27, Some("InnoDB: To recover: 1234 pages".into())));
+
+        let (probe, _) = script(vec![not_listening(7), Probe::default()]);
+        assert_eq!(await_recovery(probe, String::new, |_| {}, |_, _| {}), Err(Probe::default()), "it died");
+
+        let (probe, waits) = script(vec![not_listening(7)]);
+        assert_eq!(await_recovery(probe, String::new, |d| waits.borrow_mut().push(d), |_, _| {}), Err(not_listening(7)));
+        assert_eq!(waits.borrow().iter().sum::<Duration>(), RECOVERY_LIMIT, "bounded; still running = still recovering");
     }
 
     #[test]
