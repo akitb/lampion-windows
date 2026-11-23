@@ -97,7 +97,7 @@
   .more:hover:not(:disabled), .more[aria-expanded="true"] { background: var(--hover); }
 
   .menu {
-    margin: 0; padding: 5px; min-width: 190px;
+    padding: 5px; min-width: 190px;
     border: 1px solid var(--border-strong); border-radius: 8px;
     background: var(--surface-2); color: var(--text);
     box-shadow: 0 10px 28px rgba(0, 0, 0, 0.28);
@@ -105,7 +105,7 @@
   /* Under the button, right edges aligned; flips where it would not fit. */
   @supports (position-area: block-end) {
     .menu {
-      inset: auto; margin-top: 4px;
+      inset: auto; margin: 4px 0 0;
       position-area: block-end span-inline-start;
       position-try-fallbacks: flip-block, flip-inline, flip-block flip-inline;
     }
