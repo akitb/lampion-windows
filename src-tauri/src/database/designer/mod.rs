@@ -70,6 +70,8 @@ impl Schema {
 
 /// Tables, columns and foreign keys of `db`: three statements sent as one round trip. The name goes in as a
 /// hex literal, which reads the same in every sql_mode (NO_BACKSLASH_ESCAPES changes what `\'` means).
+/// Each information_schema table gets the name as a constant: a join condition alone makes MariaDB read
+/// the foreign keys of every database.
 pub fn load_sql(db: &str) -> String {
     let s = format!("X'{}'", hex::encode(db));
     format!(
@@ -81,7 +83,7 @@ pub fn load_sql(db: &str) -> String {
          k.REFERENCED_COLUMN_NAME, r.UPDATE_RULE, r.DELETE_RULE FROM information_schema.KEY_COLUMN_USAGE k \
          JOIN information_schema.REFERENTIAL_CONSTRAINTS r ON r.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA \
          AND r.CONSTRAINT_NAME = k.CONSTRAINT_NAME AND r.TABLE_NAME = k.TABLE_NAME \
-         WHERE k.TABLE_SCHEMA = {s} AND k.REFERENCED_TABLE_NAME IS NOT NULL \
+         WHERE k.TABLE_SCHEMA = {s} AND r.CONSTRAINT_SCHEMA = {s} AND k.REFERENCED_TABLE_NAME IS NOT NULL \
          ORDER BY k.TABLE_NAME, k.CONSTRAINT_NAME, k.ORDINAL_POSITION"
     )
 }
@@ -242,6 +244,8 @@ mod tests {
         assert_eq!(sql.matches("SELECT ").count(), 3);
         assert_eq!(sql.matches(";\n").count(), 2);
         assert_eq!(sql.matches("TABLE_SCHEMA = X'6f27625c'").count(), 3, "quotes and backslashes can't break out");
+        assert_eq!(sql.matches("X'6f27625c'").count(), 4);
+        assert!(sql.contains("r.CONSTRAINT_SCHEMA = X'6f27625c'"), "only this database's foreign keys are read");
         assert!(sql.contains("REFERENTIAL_CONSTRAINTS"));
     }
 }
