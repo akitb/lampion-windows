@@ -25,11 +25,15 @@
       name: c.name,
       type: c.type,
       nullable: c.nullable,
-      defaultText: c.default === null ? "" : c.default === "" ? "''" : c.default,
+      // Exactly as the server keeps it: the text 'NULL' stays text, '007' stays quoted.
+      defaultText: c.defaultText,
       autoIncrement: extra.includes("auto_increment"),
       primaryKey: c.key === "PRI",
       onUpdateTimestamp: extra.includes("on update"),
       comment: c.comment,
+      // What the sheet doesn't show, kept as it is.
+      collation: c.collation,
+      invisible: c.invisible,
     };
   }
 
@@ -45,7 +49,9 @@
   const fam = $derived(family(draft.type));
   const parts = $derived(typeParts(draft.type));
   const unsigned = $derived(isUnsigned(parts));
-  const canConfirm = $derived(!!draft.name.trim() && !!draft.type.trim());
+  /** A computed column's expression isn't in the sheet: saving would turn it into a plain column. */
+  const generated = $derived(!!editing?.generated);
+  const canConfirm = $derived(!generated && !!draft.name.trim() && !!draft.type.trim());
 
   const hints: Partial<Record<Family, string>> = {
     text: "VARCHAR(n) and CHAR(n) hold up to n characters. TEXT needs no length.",
@@ -111,8 +117,8 @@
   onconfirm={save}
   {onclose}
   width={540}
-  note={canConfirm ? preview : null}
-  noteIsCode
+  note={generated ? "This column is computed (GENERATED ALWAYS AS …), which this sheet can't edit. Change it with ALTER TABLE … MODIFY in the Query tab." : canConfirm ? preview : null}
+  noteIsCode={!generated}
   maxFormHeight={640}
 >
   <div class="section">
@@ -159,7 +165,7 @@
         </div>
       {/if}
     </div>
-    <p class="hint">Empty means no default. NULL, numbers and CURRENT_TIMESTAMP are used as written; other text is quoted.</p>
+    <p class="hint">Empty means no default. NULL, numbers (except for text types), (expressions) and CURRENT_TIMESTAMP are used as written; other text is quoted.</p>
   </div>
 
   <div class="section">

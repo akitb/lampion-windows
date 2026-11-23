@@ -298,6 +298,12 @@ export interface StructureColumn {
   default: string | null;
   extra: string;
   comment: string;
+  /** The default as the Column sheet's Default field holds it (saved unchanged, it stays exactly). */
+  defaultText: string;
+  /** INVISIBLE: left out of SELECT *. */
+  invisible: boolean;
+  /** Computed (GENERATED ALWAYS AS …): the Column sheet doesn't edit it. */
+  generated: boolean;
 }
 
 /** One index with its columns in index order. */
@@ -348,6 +354,10 @@ export interface ColumnDraft {
   /** ON UPDATE CURRENT_TIMESTAMP */
   onUpdateTimestamp: boolean;
   comment: string;
+  /** Edit Column keeps the column's collation (text types only)… */
+  collation?: string;
+  /** …and INVISIBLE. */
+  invisible?: boolean;
 }
 
 /** Where a saved column goes ("unchanged": at the end when adding, where it was when editing). */
