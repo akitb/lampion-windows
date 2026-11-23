@@ -14,8 +14,13 @@
   --text-2: #5f5f66;        /* secondary */
   --text-3: #8e8e96;        /* tertiary, placeholders, NULL */
   --hover: rgba(0, 0, 0, 0.045);
-  --selected: rgba(37, 99, 235, 0.12);
-  --accent: #2563eb;
+  --selected: #3478f6;      /* selected sidebar row: solid blue, white text */
+  --selected-text: #ffffff;
+  --surface-3: #f0f0f2;     /* settings page header card */
+  --input-bg: #ffffff;
+  --control: #e6e6e9;       /* plain buttons (Restart, Open Site, …) */
+  --toolbar-pill: #e4e4e7;  /* the toolbar's icon capsule */
+  --accent: #3478f6;
   --accent-text: #ffffff;
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.05), 0 1px 1px rgba(0, 0, 0, 0.03);
 
@@ -26,13 +31,14 @@
   --orange-bg: rgba(232, 121, 12, 0.09);
   --purple: #7c3aed;
 
-  /* Per-area tints (from the macOS version). */
-  --tint-apache: #e85c33;
-  --tint-mariadb: #218cad;
-  --tint-php: #6b6bcc;
-  --tint-logs: #d99a1a;
-  --tint-overview: #3878f2;
-  --tint-general: #8a8a93;
+  /* Per-area tile gradients (top → bottom), measured from the macOS screenshots. */
+  --tint-overview-top: #6793fd; --tint-overview: #4876ea;
+  --tint-logs-top: #e2b65a;     --tint-logs: #d09c3a;
+  --tint-apache-top: #ea815f;   --tint-apache: #d76540;
+  --tint-php-top: #8b8bdd;      --tint-php: #6c6bc5;
+  --tint-mariadb-top: #62a6c3;  --tint-mariadb: #468aa9;
+  --tint-general-top: #aaaaae;  --tint-general: #8e8e92;
+  --unsaved: #ffb54a;           /* sidebar pencil badge */
 
   --radius: 10px;
   --radius-sm: 6px;
@@ -40,21 +46,27 @@
   --spring: 0.28s cubic-bezier(0.2, 0.9, 0.3, 1.1);
 }
 
+/* Dark values are measured from the macOS 1.1 screenshots (lampion-macos-ref/screenshots, all dark mode). */
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #1b1b1e;
-    --bg-sidebar: #222226;
-    --surface: #262629;
-    --surface-2: #2c2c30;
-    --border: rgba(255, 255, 255, 0.08);
-    --border-strong: rgba(255, 255, 255, 0.16);
-    --text: #ececef;
-    --text-2: #a5a5ad;
-    --text-3: #75757e;
+    --bg: #1e1e1e;            /* window; Overview cards sit on it with a 1px outline */
+    --bg-sidebar: #252628;
+    --surface: #1e1e1e;
+    --surface-2: #2a2a2b;     /* settings groups */
+    --surface-3: #252526;     /* settings page header card */
+    --input-bg: #181818;
+    --control: #2f2f2f;
+    --toolbar-pill: #3c3c3c;
+    --border: #2d2d2d;
+    --border-strong: rgba(255, 255, 255, 0.14);
+    --text: #e8e8e8;
+    --text-2: #a5a5aa;
+    --text-3: #6e6e73;
     --hover: rgba(255, 255, 255, 0.05);
-    --selected: rgba(96, 140, 255, 0.2);
-    --accent: #5b8cff;
-    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+    --selected: #3478f6;
+    --accent: #3478f6;
+    --green: #5fcf5e;
+    --shadow: none;
     --red-bg: rgba(255, 90, 80, 0.12);
     --orange-bg: rgba(255, 150, 50, 0.12);
   }

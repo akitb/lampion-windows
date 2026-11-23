@@ -5,6 +5,21 @@ behaves in detail is in the Swift reference checkout at `C:\Users\akit\lampion-m
 (read-only, never edit it). Where SPEC.md is silent, port the Swift behavior faithfully.
 The UI language is **English**, like the macOS app.
 
+## Look: 1:1 with the macOS app (owner's requirement)
+
+Screenshots of the real macOS app (dark mode, **2x**: divide every pixel measurement by 2 for CSS px) are in
+`C:\Users\akit\lampion-macos-ref\screenshots` (read `README.txt` there first):
+`1-fo-ablak/` = main window (Overview, all 7 log sources, the 4 settings pages incl. scrolled `-2` parts,
+validation errors, unsaved badges); `2-adatbaziskezelo/` = Database Manager (tables, designer, data, row
+inspector, filter, console, structure tabs, views, query states, every sheet, confirmations, error alert,
+system databases). Your screens must look the same: layout, sizes, spacing, radii, colours, fonts sizes,
+icons, texts, states. Measure colours from the PNGs (Pillow is installed: `python -c "from PIL import Image"`,
+without `-I`). The Swift views give exact values where the image is ambiguous. Only macOS-only chrome changes:
+no traffic lights / macOS menu bar (the window uses the native Windows title bar). Light mode: derive it
+consistently from the same tokens (macOS light equivalents). Icons: Lucide glyphs closest to the SF Symbols
+in the screenshots (SF Symbols themselves may not be shipped on Windows). Put new shared colours in
+`src/app.css` only via the lead (ask in your final report); otherwise use the existing tokens.
+
 ## Stack
 
 - Tauri 2, Rust (edition 2021) in `src-tauri/`, SvelteKit + Svelte 5 (runes) + TypeScript in `src/` (SPA, `ssr = false`).

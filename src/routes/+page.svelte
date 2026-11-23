@@ -1,7 +1,7 @@
 <script lang="ts">
   // The main window: sidebar navigation, toolbar, notice banners and the current page.
   import { fade } from "svelte/transition";
-  import { Gauge, ScrollText, Feather, Code, Database, Settings2, Pencil, Folder, SquareTerminal, Globe } from "@lucide/svelte";
+  import { LayoutGrid, FileSearch, Server, CodeXml, Database, Settings, Pencil, Folder, SquareTerminal, Globe } from "@lucide/svelte";
   import { app } from "$lib/state.svelte";
   import { core } from "$lib/api";
   import type { Pane, ServerId } from "$lib/types";
@@ -16,16 +16,16 @@
   import SetupBanner from "$lib/banners/SetupBanner.svelte";
   import UpdateBanner from "$lib/banners/UpdateBanner.svelte";
 
-  type Row = { pane: Pane; title: string; icon: any; tint: string; key: string; server?: ServerId };
+  type Row = { pane: Pane; title: string; icon: any; tint: string; top: string; key: string; server?: ServerId };
   const main: Row[] = [
-    { pane: "overview", title: "Overview", icon: Gauge, tint: "var(--tint-overview)", key: "1" },
-    { pane: "logs", title: "Logs", icon: ScrollText, tint: "var(--tint-logs)", key: "2" },
+    { pane: "overview", title: "Overview", icon: LayoutGrid, tint: "var(--tint-overview)", top: "var(--tint-overview-top)", key: "1" },
+    { pane: "logs", title: "Logs", icon: FileSearch, tint: "var(--tint-logs)", top: "var(--tint-logs-top)", key: "2" },
   ];
   const configuration: Row[] = [
-    { pane: "apache", title: "Apache", icon: Feather, tint: "var(--tint-apache)", key: "3", server: "apache" },
-    { pane: "php", title: "PHP", icon: Code, tint: "var(--tint-php)", key: "4" },
-    { pane: "mariadb", title: "MariaDB", icon: Database, tint: "var(--tint-mariadb)", key: "5", server: "mariadb" },
-    { pane: "general", title: "General", icon: Settings2, tint: "var(--tint-general)", key: "6" },
+    { pane: "apache", title: "Apache", icon: Server, tint: "var(--tint-apache)", top: "var(--tint-apache-top)", key: "3", server: "apache" },
+    { pane: "php", title: "PHP", icon: CodeXml, tint: "var(--tint-php)", top: "var(--tint-php-top)", key: "4" },
+    { pane: "mariadb", title: "MariaDB", icon: Database, tint: "var(--tint-mariadb)", top: "var(--tint-mariadb-top)", key: "5", server: "mariadb" },
+    { pane: "general", title: "General", icon: Settings, tint: "var(--tint-general)", top: "var(--tint-general-top)", key: "6" },
   ];
   const all = [...main, ...configuration];
   const pages: Record<Pane, any> = {
@@ -65,10 +65,10 @@
       {#each section.rows as r}
         <button class="row" class:selected={app.pane === r.pane} onclick={() => (app.pane = r.pane)}
                 title="{r.title} (Ctrl+{r.key})" aria-current={app.pane === r.pane ? "page" : undefined}>
-          <IconTile icon={r.icon} tint={r.tint} />
+          <IconTile icon={r.icon} tint={r.tint} top={r.top} />
           <span class="title">{r.title}</span>
           {#if app.unsaved.includes(r.pane)}
-            <span class="pencil" title="Unsaved changes" aria-label="Unsaved changes"><Pencil size={10} strokeWidth={3} color="#fff" /></span>
+            <span class="pencil" title="Unsaved changes" aria-label="Unsaved changes"><Pencil size={8} strokeWidth={3} color="#3a2a10" /></span>
           {/if}
           {#if r.server}
             <span title="{r.title}: {stateTitle[app.servers[r.server].state]}"><StatusDot state={app.servers[r.server].state} /></span>
@@ -92,12 +92,12 @@
   <main class="detail">
     <header class="toolbar">
       <h1>{all.find((r) => r.pane === app.pane)?.title}</h1>
-      <div class="tools">
-        <button class="plain" onclick={() => core.openDatabaseWindow()} title="Open the built-in database manager (Ctrl+D)"><Database size={16} /> Database Manager</button>
-        <button class="plain" onclick={() => core.openPath(webFolder)} title="Open the web folder in Explorer ({webFolder})"><Folder size={16} /> Web Folder</button>
-        <button class="plain" onclick={() => core.openTerminal(webFolder)} title="Open a terminal in the web folder"><SquareTerminal size={16} /> Terminal</button>
-        <button class="plain" disabled={apache.state !== "running"} onclick={() => core.openUrl(`http://localhost:${apache.ports[0] ?? apache.port}/`)}
-                title="Open http://localhost:{apache.ports[0] ?? apache.port}/ in the browser"><Globe size={16} /> Open Website</button>
+      <div class="tools" role="toolbar" aria-label="Shortcuts">
+        <button onclick={() => core.openDatabaseWindow()} title="Open the built-in database manager (Ctrl+D)" aria-label="Database Manager"><Database size={18} strokeWidth={1.6} /></button>
+        <button onclick={() => core.openPath(webFolder)} title="Open the web folder in Explorer ({webFolder})" aria-label="Web Folder"><Folder size={18} strokeWidth={1.6} /></button>
+        <button onclick={() => core.openTerminal(webFolder)} title="Open a terminal in the web folder" aria-label="Terminal"><SquareTerminal size={18} strokeWidth={1.6} /></button>
+        <button disabled={apache.state !== "running"} onclick={() => core.openUrl(`http://localhost:${apache.ports[0] ?? apache.port}/`)}
+                title="Open http://localhost:{apache.ports[0] ?? apache.port}/ in the browser" aria-label="Open Website"><Globe size={18} strokeWidth={1.6} /></button>
       </div>
     </header>
     <UpdateBanner />
@@ -111,23 +111,25 @@
 </div>
 
 <style>
+  /* Sizes are the macOS screenshots' measurements halved (they are 2x). */
   .window { display: flex; height: 100vh; }
-  .sidebar { width: 210px; flex: none; background: var(--bg-sidebar); border-right: 1px solid var(--border); display: flex; flex-direction: column; padding: 10px 8px; gap: 1px; }
-  .section { font-size: 11px; font-weight: 600; color: var(--text-3); padding: 14px 8px 4px; }
-  .row { display: flex; align-items: center; gap: 8px; border: none; background: none; box-shadow: none; padding: 5px 8px; border-radius: 6px; text-align: left; width: 100%; min-height: 30px; }
-  .row:hover { background: var(--hover); }
-  .row.selected { background: var(--selected); }
+  .sidebar { width: 190px; flex: none; background: var(--bg-sidebar); display: flex; flex-direction: column; padding: 8px 10px 10px; gap: 0; }
+  .section { font-size: 11px; font-weight: 500; color: var(--text-3); padding: 12px 4px 5px; }
+  .row { display: flex; align-items: center; gap: 8px; border: none; background: none; box-shadow: none; padding: 0 8px 0 6px; border-radius: 7px; text-align: left; width: 100%; height: 31px; font-size: 13px; }
+  .row:hover:not(.selected) { background: var(--hover); }
+  .row.selected { background: var(--selected); color: var(--selected-text); font-weight: 500; }
   .title { flex: 1; }
-  .pencil { display: inline-flex; width: 15px; height: 15px; border-radius: 50%; background: var(--orange); align-items: center; justify-content: center; }
+  .pencil { display: inline-flex; width: 13px; height: 13px; border-radius: 50%; background: var(--unsaved); align-items: center; justify-content: center; margin-right: 4px; }
   .badge { background: var(--red); color: #fff; font-size: 11px; font-weight: 600; border-radius: 9px; padding: 0 6px; min-width: 18px; text-align: center; }
-  .footer { margin-top: auto; border-top: 1px solid var(--border); padding: 10px 6px 2px; display: flex; flex-direction: column; gap: 7px; }
-  .srv { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+  .footer { margin-top: auto; border-top: 1px solid var(--border-strong); padding: 9px 0 0; display: flex; flex-direction: column; gap: 6px; }
+  .srv { display: flex; align-items: center; gap: 8px; font-size: 11px; padding-left: 2px; }
   .srv .port { margin-left: auto; color: var(--text-2); font-variant-numeric: tabular-nums; }
-  .detail { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-  .toolbar { display: flex; align-items: center; gap: 12px; height: 48px; padding: 0 12px 0 20px; border-bottom: 1px solid var(--border); flex: none; }
+  .detail { flex: 1; display: flex; flex-direction: column; min-width: 0; background: var(--bg); }
+  .toolbar { display: flex; align-items: center; gap: 12px; height: 52px; padding: 0 8px 0 20px; flex: none; }
   .toolbar h1 { font-size: 15px; font-weight: 600; margin: 0; }
-  .tools { margin-left: auto; display: flex; gap: 2px; }
-  .tools button { display: inline-flex; align-items: center; gap: 6px; color: var(--text-2); }
+  .tools { margin-left: auto; display: flex; align-items: center; gap: 2px; background: var(--toolbar-pill); border-radius: 18px; padding: 3px 6px; height: 36px; }
+  .tools button { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 30px; padding: 0; border: none; background: none; box-shadow: none; border-radius: 15px; color: var(--text); }
+  .tools button:hover:not(:disabled) { background: var(--hover); }
   .content { flex: 1; position: relative; min-height: 0; }
   .page { position: absolute; inset: 0; overflow: auto; }
 </style>
