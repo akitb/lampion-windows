@@ -102,11 +102,14 @@ pub fn assemble(db: &str, tables: &[Vec<String>], columns: &[Vec<String>], keys:
             nullable: cell(r, 4).eq_ignore_ascii_case("YES"),
         });
     }
+    // A sequence never takes part in a foreign key, so it is no card; information_schema's tables are
+    // SYSTEM VIEWs: views, which no relation can be drawn from or to either.
     let tables: Vec<Table> = tables
         .iter()
+        .filter(|r| cell(r, 1) != "SEQUENCE")
         .map(|r| Table {
             name: cell(r, 0),
-            is_view: cell(r, 1) == "VIEW",
+            is_view: matches!(cell(r, 1).as_str(), "VIEW" | "SYSTEM VIEW"),
             engine: cell(r, 2),
             columns: by_table.remove(&cell(r, 0)).unwrap_or_default(),
         })
@@ -225,6 +228,24 @@ mod tests {
         assert_eq!(s.relations[0].ref_columns, ["x", "y"]);
         assert_eq!(s.relations[1].table, "b");
         assert!(s.tables.iter().all(|t| t.columns.is_empty()));
+    }
+
+    #[test]
+    fn system_views_take_no_relations_and_sequences_are_no_cards() {
+        let s = assemble(
+            "d",
+            &[
+                row(&["COLUMNS", "SYSTEM VIEW", "Aria"]),
+                row(&["history", "SYSTEM VERSIONED", "InnoDB"]),
+                row(&["ids", "SEQUENCE", "InnoDB"]),
+                row(&["t", "BASE TABLE", "InnoDB"]),
+            ],
+            &[row(&["ids", "next_not_cached_value", "bigint(21)", "", "NO"])],
+            &[],
+        );
+        assert_eq!(s.tables.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), ["COLUMNS", "history", "t"]);
+        assert!(s.table("COLUMNS").unwrap().is_view, "information_schema's tables can't be linked");
+        assert!(!s.table("history").unwrap().is_view, "a system-versioned table is a table");
     }
 
     #[test]

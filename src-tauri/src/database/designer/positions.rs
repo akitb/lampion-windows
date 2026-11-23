@@ -7,9 +7,10 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 pub type Positions = BTreeMap<String, [f64; 2]>;
 
-const DEVICES: [&str; 22] = [
-    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2",
-    "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+/// Windows' reserved names. The ones with superscript digits (COM¹, LPT³…) need no entry: non-ASCII bytes are escaped.
+const DEVICES: [&str; 24] = [
+    "CON", "PRN", "AUX", "NUL", "COM0", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT0",
+    "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
 ];
 
 /// A file name for any database name: letters, digits, `_` and `-` stay, every other byte becomes `%XX`,
@@ -67,6 +68,10 @@ mod tests {
         assert_eq!(file_name("100%"), "100%25.json", "% itself is escaped, so names never collide");
         assert_eq!(file_name("con"), "%63on.json");
         assert_eq!(file_name("COM1"), "%43OM1.json");
+        assert_eq!(file_name("com0"), "%63om0.json");
+        assert_eq!(file_name("Lpt0"), "%4Cpt0.json");
+        assert_eq!(file_name("COM¹"), "COM%C2%B9.json", "superscript digits are escaped, so never a device");
+        assert_eq!(file_name("lpt³"), "lpt%C2%B3.json");
         assert_eq!(file_name("console"), "console.json");
         assert_eq!(file_name("ár"), "%C3%A1r.json");
     }
