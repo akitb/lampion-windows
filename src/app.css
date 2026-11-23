@@ -1,0 +1,122 @@
+/* Lampion design tokens. Every component uses these variables, so light and dark follow the system. */
+:root {
+  color-scheme: light dark;
+  --font: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --mono: "Cascadia Mono", "Cascadia Code", Consolas, monospace;
+
+  --bg: #f3f3f5;            /* window */
+  --bg-sidebar: #ebebef;
+  --surface: #ffffff;       /* cards, panels */
+  --surface-2: #f7f7f9;     /* alternating rows, inputs */
+  --border: rgba(0, 0, 0, 0.09);
+  --border-strong: rgba(0, 0, 0, 0.16);
+  --text: #1c1c1f;
+  --text-2: #5f5f66;        /* secondary */
+  --text-3: #8e8e96;        /* tertiary, placeholders, NULL */
+  --hover: rgba(0, 0, 0, 0.045);
+  --selected: rgba(37, 99, 235, 0.12);
+  --accent: #2563eb;
+  --accent-text: #ffffff;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.05), 0 1px 1px rgba(0, 0, 0, 0.03);
+
+  --green: #1f9d55;
+  --orange: #e8790c;
+  --red: #d92d20;
+  --red-bg: rgba(217, 45, 32, 0.08);
+  --orange-bg: rgba(232, 121, 12, 0.09);
+  --purple: #7c3aed;
+
+  /* Per-area tints (from the macOS version). */
+  --tint-apache: #e85c33;
+  --tint-mariadb: #218cad;
+  --tint-php: #6b6bcc;
+  --tint-logs: #d99a1a;
+  --tint-overview: #3878f2;
+  --tint-general: #8a8a93;
+
+  --radius: 10px;
+  --radius-sm: 6px;
+  --fade: 0.18s;
+  --spring: 0.28s cubic-bezier(0.2, 0.9, 0.3, 1.1);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1b1b1e;
+    --bg-sidebar: #222226;
+    --surface: #262629;
+    --surface-2: #2c2c30;
+    --border: rgba(255, 255, 255, 0.08);
+    --border-strong: rgba(255, 255, 255, 0.16);
+    --text: #ececef;
+    --text-2: #a5a5ad;
+    --text-3: #75757e;
+    --hover: rgba(255, 255, 255, 0.05);
+    --selected: rgba(96, 140, 255, 0.2);
+    --accent: #5b8cff;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+    --red-bg: rgba(255, 90, 80, 0.12);
+    --orange-bg: rgba(255, 150, 50, 0.12);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root { --fade: 0s; --spring: 0s linear; }
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; overflow: hidden; }
+body {
+  font-family: var(--font);
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  cursor: default;
+}
+input, textarea, select, button { font: inherit; color: inherit; }
+input, textarea, [contenteditable] { user-select: text; }
+code, .mono { font-family: var(--mono); font-size: 12px; }
+
+button {
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  border-radius: var(--radius-sm);
+  padding: 4px 11px;
+  min-height: 26px;
+  box-shadow: var(--shadow);
+  cursor: default;
+}
+button:hover:not(:disabled) { background: var(--surface-2); }
+button:active:not(:disabled) { filter: brightness(0.95); }
+button:disabled { opacity: 0.45; }
+button.primary { background: var(--accent); border-color: transparent; color: var(--accent-text); }
+button.primary:hover:not(:disabled) { background: var(--accent); filter: brightness(1.08); }
+button.danger { color: var(--red); }
+button.plain { border: none; background: none; box-shadow: none; padding: 3px 6px; }
+button.plain:hover:not(:disabled) { background: var(--hover); }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+input[type="text"], input[type="number"], input[type="password"], input[type="search"], input:not([type]), select, textarea {
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+  min-height: 26px;
+}
+input.invalid, select.invalid, textarea.invalid { border-color: var(--red); box-shadow: 0 0 0 1px var(--red); }
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+}
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 10px; border: 2px solid transparent; background-clip: padding-box; }
+::-webkit-scrollbar-corner { background: transparent; }
