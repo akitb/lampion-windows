@@ -60,13 +60,13 @@
     --toolbar-pill: #3c3c3c;
     --border: #2d2d2d;
     --border-strong: rgba(255, 255, 255, 0.14);
-    --text: #e8e8e8;
-    --text-2: #a5a5aa;
-    --text-3: #6e6e73;
+    --text: rgba(255, 255, 255, 0.85);   /* macOS label colours, measured #dddddd / #9a9a9a / #565656 */
+    --text-2: rgba(255, 255, 255, 0.55);
+    --text-3: rgba(255, 255, 255, 0.25);
     --hover: rgba(255, 255, 255, 0.05);
     --selected: #3478f6;
     --accent: #3478f6;
-    --green: #5fcf5e;
+    --green: #68ce67;
     --red: #eb534e;           /* invalid fields, errors (measured) */
     --orange: #f1a24c;        /* warnings (measured) */
     --link: #5a9af8;

@@ -259,11 +259,11 @@ fn check(finished: &[Server], reread_ports: bool) {
     }
 }
 
-/// The database client follows MariaDB's port (contract: `configure(port, None)` when it changes).
+/// The database client follows MariaDB's port, keeping a root password the user set.
 fn point_client_at(port: u16) {
     if crate::database::client::port() != port {
-        // `configure` may close the old pool on the async runtime, so it must run there.
-        tauri::async_runtime::spawn(async move { crate::database::client::configure(port, None) });
+        // `set_port` may close the old pool on the async runtime, so it must run there.
+        tauri::async_runtime::spawn(async move { crate::database::client::set_port(port) });
     }
 }
 

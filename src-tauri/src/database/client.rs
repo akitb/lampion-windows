@@ -27,6 +27,12 @@ pub fn configure(port: u16, password: Option<String>) {
     }
 }
 
+/// Follows a new MariaDB port and keeps the root password the user set (if any).
+pub fn set_port(port: u16) {
+    let password = TARGET.lock().unwrap().password.clone();
+    configure(port, password);
+}
+
 pub fn port() -> u16 {
     TARGET.lock().unwrap().port
 }
