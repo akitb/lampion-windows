@@ -9,7 +9,7 @@
   import { contextMenu, type MenuItem } from "../menu.svelte";
   import { copy } from "../util";
   import Card from "./Card.svelte";
-  import { arrowPath, curvePath, linkPath, revealPan, rowCenter, summary, toWorld, type Point } from "./diagram";
+  import { arrowPath, curvePath, ends, linkPath, revealPan, rowCenter, summary, toWorld, type Point } from "./diagram";
   import type { DesignerStore } from "./store.svelte";
 
   let { store, database }: { store: DesignerStore; database: string } = $props();
@@ -210,11 +210,18 @@
     { label: "Copy Name", action: () => void copy(t) },
   ];
 
+  /** The relations of a card, each to delete: the keyboard's way to what the pointer reaches on the lines. */
+  function relationItems(t: string): MenuItem[] {
+    const own = store.schema?.relations.filter((r) => r.table === t || r.refTable === t) ?? [];
+    if (!own.length) return [];
+    return [{ separator: true }, ...own.map((r) => ({ label: `Delete Relation “${ends(r)}”…`, action: () => store.confirmDelete(r) }))];
+  }
+
   function menu(e: MouseEvent) {
     const card = (e.target as HTMLElement).closest<HTMLElement>("[data-table]");
     if (e.button !== 2 && card?.dataset.table) {
       // From the keyboard (Menu key, Shift+F10) on a focused card.
-      contextMenu(e, tableItems(card.dataset.table));
+      contextMenu(e, [...tableItems(card.dataset.table), ...relationItems(card.dataset.table)]);
       return;
     }
     measureOrigin();

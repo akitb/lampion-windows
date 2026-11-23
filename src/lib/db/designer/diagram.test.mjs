@@ -3,7 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  arrowPath, autoLayout, cardLayout, clampPan, columnAt, compactType, countText, curveDistance, curvePoint, dropSql,
+  arrowPath, autoLayout, cardLayout, clampPan, columnAt, compactType, countText, curveDistance, curvePoint, dropSql, ends,
   emphasis, explain, fitView, linkPath, linkRelation, Loader, METRICS, placed, relationAt, relationColumns, relationCurves,
   relationId, revealPan, rowCenter, rowHelp, sqlTokens, summary, tableAt, toWorld, typeFamily, zoomView, ZOOM,
 } from "./diagram.ts";
@@ -66,6 +66,7 @@ test("type families pick the chip colour", () => {
 
 test("summaries, counts, row help and error hints read like the macOS app", () => {
   assert.equal(summary(shop.relations[1]), "order_items.order_id → orders.id · ON DELETE CASCADE");
+  assert.equal(ends(shop.relations[1]), "order_items.order_id → orders.id", "the card menu's Delete Relation item");
   assert.equal(summary(rel("fk", "a", ["x", "y"], "b", ["x", "y"], "RESTRICT", "CASCADE")),
     "a.(x, y) → b.(x, y) · ON DELETE RESTRICT · ON UPDATE CASCADE");
   assert.equal(summary(rel("fk", "a", ["x"], "b", ["y"], "NO ACTION", "NO ACTION")), "a.x → b.y · ON DELETE NO ACTION");

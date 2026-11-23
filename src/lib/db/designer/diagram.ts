@@ -61,11 +61,15 @@ export function typeFamily(raw: string): TypeFamily {
 /** A relation's identity on the diagram (constraint names are unique per table). */
 export const relationId = (r: DesignerRelation) => r.table + "\u0001" + r.name;
 
+/** `orders.customer_id → customers.id`; composite keys `a.(x, y) → b.(x, y)`. */
+export function ends(r: DesignerRelation): string {
+  const side = (table: string, columns: string[]) => (columns.length === 1 ? `${table}.${columns[0]}` : `${table}.(${columns.join(", ")})`);
+  return `${side(r.table, r.columns)} → ${side(r.refTable, r.refColumns)}`;
+}
+
 /** `orders.customer_id → customers.id · ON DELETE CASCADE` */
 export function summary(r: DesignerRelation): string {
-  const from = r.columns.length === 1 ? `${r.table}.${r.columns[0]}` : `${r.table}.(${r.columns.join(", ")})`;
-  const to = r.refColumns.length === 1 ? `${r.refTable}.${r.refColumns[0]}` : `${r.refTable}.(${r.refColumns.join(", ")})`;
-  let text = `${from} → ${to} · ON DELETE ${r.onDelete}`;
+  let text = `${ends(r)} · ON DELETE ${r.onDelete}`;
   if (r.onUpdate !== "RESTRICT" && r.onUpdate !== "NO ACTION") text += ` · ON UPDATE ${r.onUpdate}`;
   return text;
 }
