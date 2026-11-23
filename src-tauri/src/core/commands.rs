@@ -94,8 +94,9 @@ pub async fn pick_path(
 }
 
 /// Opens (or focuses) the Database Manager window (`/database` route).
+/// Async on purpose: building a webview window from a sync command (main thread) deadlocks on Windows.
 #[tauri::command]
-pub fn open_database_window(app: AppHandle) -> Result<(), String> {
+pub async fn open_database_window(app: AppHandle) -> Result<(), String> {
     if let Some(w) = app.get_webview_window("database") {
         let _ = w.unminimize();
         return w.set_focus().map_err(|e| e.to_string());
