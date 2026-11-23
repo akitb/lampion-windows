@@ -171,7 +171,7 @@
           <span class="note" transition:fade={{ duration: 150 }}><Info size={14} strokeWidth={2} /> Every value in “{relation.column}” must then exist in “{relation.refTable}.{relation.refColumn}”.</span>
         {/if}
       </span>
-      <button type="button" class="pushbtn large" onclick={() => dialog?.close()}>Cancel</button>
+      <button type="button" class="pushbtn large" onclick={() => dialog?.close()} disabled={running}>Cancel</button>
       <button type="submit" class="pushbtn large prominent" disabled={running}>{running ? "Creating…" : "Create Relation"}</button>
     </footer>
   </form>
