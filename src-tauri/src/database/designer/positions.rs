@@ -2,7 +2,8 @@
 //! `{ "table": [x, y], … }` in diagram points. A missing or broken file just means "not arranged yet".
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 pub type Positions = BTreeMap<String, [f64; 2]>;
 
@@ -33,8 +34,10 @@ pub fn read(path: &Path) -> Positions {
     std::fs::read_to_string(path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
 }
 
-/// Saves the positions; an empty map forgets them (Auto Arrange).
+/// Saves the positions; an empty map forgets them (Auto Arrange). Through a temp file of its own and a
+/// rename, so the file is never half-written, even when two saves overlap.
 pub fn write(path: &Path, positions: &Positions) -> Result<(), String> {
+    static N: AtomicU32 = AtomicU32::new(0);
     if positions.is_empty() {
         return match std::fs::remove_file(path) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(format!("Could not forget the card positions: {e}")),
@@ -45,7 +48,11 @@ pub fn write(path: &Path, positions: &Positions) -> Result<(), String> {
         std::fs::create_dir_all(dir).map_err(|e| format!("Could not save the card positions: {e}"))?;
     }
     let json = serde_json::to_string(positions).map_err(|e| e.to_string())?;
-    std::fs::write(path, json).map_err(|e| format!("Could not save the card positions: {e}"))
+    let tmp = PathBuf::from(format!("{}.{}-{}.tmp", path.display(), std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
+    std::fs::write(&tmp, json).and_then(|()| std::fs::rename(&tmp, path)).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("Could not save the card positions: {e}")
+    })
 }
 
 #[cfg(test)]
@@ -74,6 +81,10 @@ mod tests {
         p.insert("customers".into(), [-3.0, 0.5]);
         write(&path, &p).unwrap();
         assert_eq!(read(&path), p);
+        p.insert("orders".into(), [41.0, 120.0]);
+        write(&path, &p).unwrap();
+        assert_eq!(read(&path), p, "a save replaces the file");
+        assert_eq!(std::fs::read_dir(path.parent().unwrap()).unwrap().count(), 1, "no temp file is left");
         write(&path, &Positions::new()).unwrap();
         assert!(!path.exists());
         write(&path, &Positions::new()).unwrap();
