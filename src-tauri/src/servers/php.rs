@@ -1,6 +1,6 @@
 //! PHP for the Overview's PHP card: its version, whether Apache runs it, and two limits from php.ini.
 
-use super::{configs, monitor};
+use super::configs;
 use crate::core::{activity, paths, shell};
 use once_cell::sync::Lazy;
 use serde::Serialize;
@@ -52,7 +52,8 @@ pub fn info() -> PhpInfo {
     PhpInfo {
         installed,
         version: if installed { version() } else { None },
-        linked: loads_php(&conf) && monitor::status().apache.state == monitor::State::Running,
+        // Like macOS: "Linked" means httpd.conf loads PHP, whether or not Apache runs right now.
+        linked: loads_php(&conf),
         memory_limit: configs::ini_value(&ini, "memory_limit"),
         upload_max_filesize: configs::ini_value(&ini, "upload_max_filesize"),
     }
