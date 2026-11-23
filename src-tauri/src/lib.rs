@@ -52,6 +52,28 @@ pub fn run() {
             core::commands::pick_path,
             // ---- servers ----
             // ---- config ----
+            config::commands::config_apache_load,
+            config::commands::config_apache_check,
+            config::commands::config_apache_save,
+            config::commands::config_php_load,
+            config::commands::config_php_check,
+            config::commands::config_php_save,
+            config::commands::config_php_modules,
+            config::commands::config_timezones,
+            config::commands::config_mariadb_load,
+            config::commands::config_mariadb_check,
+            config::commands::config_mariadb_save,
+            config::commands::config_snippets,
+            config::commands::config_root_state,
+            config::commands::config_set_root_no_password,
+            config::commands::config_phpmyadmin_state,
+            config::commands::config_set_phpmyadmin_auto_login,
+            config::commands::config_backups,
+            config::commands::config_restore,
+            config::commands::config_edit_file,
+            config::commands::config_locations,
+            config::commands::config_open_at_login,
+            config::commands::config_set_open_at_login,
             // ---- logs ----
             // ---- database (data, query, sidebar) ----
             // ---- database (structure, designer) ----
