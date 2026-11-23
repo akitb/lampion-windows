@@ -26,17 +26,29 @@ pub fn get_settings() -> settings::Settings {
     settings::get()
 }
 
-/// Merges the given fields into the settings (camelCase keys, as `get_settings` returns them).
+/// The settings a page may change directly (General's switches). The others change only through their
+/// own commands: the Lampion folder through setup or a move, services, root and phpMyAdmin access,
+/// open at login, a skipped update.
+const PAGE_SETTINGS: [&str; 3] = ["startServersOnOpen", "stopServersOnQuit", "checkForUpdates"];
+
+/// Merges `patch` (camelCase keys, as `get_settings` returns them) into `s`; only `PAGE_SETTINGS`.
+fn apply_patch(s: &mut settings::Settings, patch: &serde_json::Value) -> Result<(), String> {
+    let patch = patch.as_object().ok_or("The settings change must be an object.")?;
+    if let Some(key) = patch.keys().find(|k| !PAGE_SETTINGS.contains(&k.as_str())) {
+        return Err(format!("The setting {key} cannot be changed here."));
+    }
+    let mut merged = serde_json::to_value(&*s).map_err(|e| e.to_string())?;
+    if let Some(obj) = merged.as_object_mut() {
+        obj.extend(patch.iter().map(|(k, v)| (k.clone(), v.clone())));
+    }
+    *s = serde_json::from_value(merged).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Changes General's switches; the change is made on the settings as they are at that moment.
 #[tauri::command]
 pub fn set_settings(patch: serde_json::Value) -> Result<settings::Settings, String> {
-    let mut current = serde_json::to_value(settings::get()).map_err(|e| e.to_string())?;
-    if let (Some(obj), Some(p)) = (current.as_object_mut(), patch.as_object()) {
-        for (k, v) in p {
-            obj.insert(k.clone(), v.clone());
-        }
-    }
-    let next: settings::Settings = serde_json::from_value(current).map_err(|e| e.to_string())?;
-    Ok(settings::update(|s| *s = next))
+    settings::try_update(|s| apply_patch(s, &patch))
 }
 
 #[tauri::command]
@@ -129,5 +141,23 @@ mod tests {
         assert_eq!(wt_args(r"C:\Lampion\www"), ["-d", r"C:\Lampion\www"]);
         assert_eq!(wt_args(r"C:\a;calc.exe"), ["-d", r"C:\a\;calc.exe"]);
         assert!(open_terminal(r"C:\no such folder\x".into()).is_err(), "only an existing folder");
+    }
+
+    #[test]
+    fn pages_change_only_their_own_settings() {
+        let mut s = settings::Settings::default();
+        apply_patch(&mut s, &serde_json::json!({ "checkForUpdates": false, "stopServersOnQuit": true })).unwrap();
+        assert!(!s.check_for_updates && s.stop_servers_on_quit);
+        for refused in [
+            serde_json::json!({ "lampionRoot": r"C:\Users\Public" }),
+            serde_json::json!({ "useServices": true }),
+            serde_json::json!({ "rootNoPassword": true, "checkForUpdates": true }),
+            serde_json::json!({ "anything": 1 }),
+        ] {
+            assert!(apply_patch(&mut s, &refused).unwrap_err().contains("cannot be changed here"), "{refused}");
+        }
+        assert!(apply_patch(&mut s, &serde_json::json!({ "checkForUpdates": "yes" })).is_err(), "booleans only");
+        assert!(apply_patch(&mut s, &serde_json::json!([1])).is_err());
+        assert!(!s.check_for_updates && s.lampion_root.is_empty() && !s.use_services, "a refused change changes nothing");
     }
 }
