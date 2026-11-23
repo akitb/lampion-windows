@@ -1,6 +1,6 @@
 [package]
 name = "lampion"
-version = "1.0.0"
+version = "1.0.1"
 description = "Lampion: a Windows control panel for Apache, PHP and MariaDB with a built-in database manager"
 authors = ["akitb"]
 edition = "2021"
