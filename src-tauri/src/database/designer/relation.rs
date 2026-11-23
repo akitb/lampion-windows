@@ -51,7 +51,8 @@ pub fn drop_sql(db: &str, table: &str, name: &str) -> String {
 const INTEGERS: [&str; 6] = ["int", "tinyint", "smallint", "mediumint", "bigint", "integer"];
 
 /// The part of a type that must match for a foreign key: integer kind and signedness, or the type itself.
-/// Display widths (`int(10)`) and string lengths may differ.
+/// Display widths (`int(10)`) and string lengths may differ, and InnoDB pairs CHAR with VARCHAR and
+/// BINARY with VARBINARY.
 pub fn fk_comparable(raw: &str) -> String {
     let t = raw.trim().to_lowercase();
     if let Some(open) = t.find('(') {
@@ -60,8 +61,11 @@ pub fn fk_comparable(raw: &str) -> String {
             let kind = if head == "integer" { "int" } else { head };
             return format!("{kind}{}", if t.contains("unsigned") { " unsigned" } else { "" });
         }
-        if ["char", "varchar", "binary", "varbinary"].contains(&head) {
-            return head.to_string();
+        if head == "char" || head == "varchar" {
+            return "char".into();
+        }
+        if head == "binary" || head == "varbinary" {
+            return "binary".into();
         }
     }
     t.replace("integer", "int")
@@ -160,7 +164,9 @@ mod tests {
         assert_ne!(fk_comparable("int(10) unsigned"), fk_comparable("int(11)"));
         assert_ne!(fk_comparable("int unsigned"), fk_comparable("bigint unsigned"));
         assert_eq!(fk_comparable("varchar(64)"), fk_comparable("varchar(255)"));
-        assert_ne!(fk_comparable("varchar(64)"), fk_comparable("char(64)"));
+        assert_eq!(fk_comparable("varchar(64)"), fk_comparable("CHAR(36)"), "InnoDB links CHAR and VARCHAR");
+        assert_eq!(fk_comparable("binary(16)"), fk_comparable("varbinary(255)"));
+        assert_ne!(fk_comparable("char(36)"), fk_comparable("binary(36)"));
         assert_ne!(fk_comparable("decimal(10,2)"), fk_comparable("decimal(12,2)"));
     }
 
