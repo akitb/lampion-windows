@@ -226,3 +226,40 @@ export interface PhpInfo {
   memoryLimit: string | null;
   uploadMaxFilesize: string | null;
 }
+
+// ---- logs ----
+
+/** The Logs page's sources; also the `detail.source` of the `logs:show` window event. */
+export type LogSource = "activity" | "apacheError" | "apacheAccess" | "php" | "mariadb" | "mariadbSlow" | "mariadbGeneral";
+
+/** One line of a server log, split into time · tag · message. */
+export interface LogLine {
+  id: number;
+  level: Level;
+  time: string | null;
+  tag: string | null;
+  /** The line without its time and tag; null: show `text`. */
+  message: string | null;
+  /** The line as written (copied and searched). */
+  text: string;
+}
+
+/** A server log's state (`logs_follow`, `logs_reload`, `logs_clear`) and its changes (`logs://update`). */
+export interface LogUpdate {
+  source: LogSource;
+  /** Grows with every update; anything not newer than what the page has is ignored. */
+  seq: number;
+  /** `lines` replace the list instead of adding to it. */
+  reset: boolean;
+  lines: LogLine[];
+  exists: boolean;
+  size: number;
+  path: string;
+}
+
+/** A source chip (`logs_sources`); Lampion Activity's path is Lampion.log. */
+export interface LogSourceInfo {
+  source: LogSource;
+  path: string;
+  exists: boolean;
+}
