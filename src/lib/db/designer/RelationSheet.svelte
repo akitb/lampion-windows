@@ -70,14 +70,19 @@
     running = true;
     error = null;
     try {
-      const s = await designerApi.addRelation(database, relation, onDelete, onUpdate, name);
-      store.applySchema(s);
+      const r = await designerApi.addRelation(database, relation, onDelete, onUpdate, name);
+      // Also without a foreign key: MariaDB still made the column's index, which the diagram and the sidebar show.
+      store.applySchema(r.schema);
       store.changed();
-      dialog?.close();
+      if (r.created) {
+        dialog?.close();
+        return;
+      }
+      error = "MariaDB accepted the statement, but no foreign key was created. This happens when a table does not use the InnoDB engine (for example MyISAM).";
     } catch (err) {
       error = message(err);
-      running = false;
     }
+    running = false;
   }
 </script>
 

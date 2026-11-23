@@ -27,8 +27,9 @@ export const designerApi = {
   /** `name` null: use (and return) the suggested name. */
   preview: (database: string, relation: DesignerNewRelation, onDelete: string, onUpdate: string, name: string | null) =>
     call<DesignerPreview>("db_designer_preview", { database, relation, onDelete, onUpdate, name }),
+  /** `created` false: MariaDB took the statement but kept no foreign key (MyISAM); the schema is fresh all the same. */
   addRelation: (database: string, relation: DesignerNewRelation, onDelete: string, onUpdate: string, name: string) =>
-    track(call<DesignerSchema>("db_designer_add_relation", { database, relation, onDelete, onUpdate, name })),
+    track(call<{ schema: DesignerSchema; created: boolean }>("db_designer_add_relation", { database, relation, onDelete, onUpdate, name })),
   dropRelation: (database: string, table: string, name: string) =>
     track(call<DesignerSchema>("db_designer_drop_relation", { database, table, name })),
   /** An empty map forgets the positions. */

@@ -85,6 +85,15 @@ pub async fn db_designer_preview(
     Ok(RelationPreview { sql, warnings, suggested_name })
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RelationAdded {
+    pub schema: Schema,
+    /// False when MariaDB took the statement but kept no foreign key (MyISAM and other engines ignore
+    /// them); the index it made for the column is in `schema` all the same.
+    pub created: bool,
+}
+
 /// Adds the foreign key and returns the fresh schema. MariaDB's error comes back as the error text.
 #[tauri::command]
 pub async fn db_designer_add_relation(
@@ -93,14 +102,11 @@ pub async fn db_designer_add_relation(
     on_delete: String,
     on_update: String,
     name: String,
-) -> Result<Schema, String> {
+) -> Result<RelationAdded, String> {
     let sql = relation::add_sql(&database, &relation, &on_delete, &on_update, &name)?;
     client::query(&sql).await?;
     let schema = read(&database).await?;
-    if !relation::created(&schema, &relation) {
-        return Err(relation::NOT_CREATED.into());
-    }
-    Ok(schema)
+    Ok(RelationAdded { created: relation::created(&schema, &relation), schema })
 }
 
 /// Drops a foreign key (the columns and their data stay) and returns the fresh schema.

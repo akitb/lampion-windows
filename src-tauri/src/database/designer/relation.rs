@@ -10,10 +10,6 @@ use std::collections::HashSet;
 /// ON DELETE / ON UPDATE choices, as the sheet offers them.
 pub const RULES: [&str; 4] = ["RESTRICT", "CASCADE", "SET NULL", "NO ACTION"];
 
-/// MariaDB took the statement but kept no foreign key (MyISAM and other engines ignore them).
-pub const NOT_CREATED: &str = "MariaDB accepted the statement, but no foreign key was created. \
-     This happens when a table does not use the InnoDB engine (for example MyISAM).";
-
 /// `table.column` becomes a foreign key that refers to `ref_table.ref_column`.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
