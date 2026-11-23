@@ -119,7 +119,25 @@ pub fn run() {
             database::commands::db_export,
             database::commands::db_import,
             database::commands::db_show_main_window,
-            // ---- database (structure, designer) ----
+            // ---- database (structure) ----
+            database::structure_commands::db_structure_load,
+            database::structure_commands::db_structure_columns,
+            database::structure_commands::db_structure_choices,
+            database::structure_commands::db_structure_column_sql,
+            database::structure_commands::db_structure_check_name,
+            database::structure_commands::db_structure_save_column,
+            database::structure_commands::db_structure_drop_column,
+            database::structure_commands::db_structure_add_index,
+            database::structure_commands::db_structure_drop_index,
+            database::structure_commands::db_structure_add_foreign_key,
+            database::structure_commands::db_structure_drop_foreign_key,
+            database::structure_commands::db_structure_rename_table,
+            database::structure_commands::db_structure_copy_table,
+            database::structure_commands::db_structure_set_options,
+            database::structure_commands::db_structure_maintenance,
+            database::structure_commands::db_create_table,
+            database::structure_commands::db_create_database,
+            // ---- database (designer) ----
             // ---- app (updater, selftest, quit) ----
             app::commands::update_check,
             app::commands::update_state,
