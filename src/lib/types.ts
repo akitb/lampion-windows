@@ -283,3 +283,98 @@ export type UpdateState =
   | { state: "downloading"; release: Release; progress: number }
   | { state: "installing"; release: Release }
   | { state: "failed"; message: string; /** The releases page ("Download Manually"). */ page: string };
+
+// ---- database structure ----
+
+/** A column as SHOW FULL COLUMNS describes it (`db_structure_load`). */
+export interface StructureColumn {
+  name: string;
+  type: string;
+  collation: string;
+  nullable: boolean;
+  /** "PRI", "UNI", "MUL" or "". */
+  key: string;
+  /** null: no default (or NULL); "" is an empty text default. */
+  default: string | null;
+  extra: string;
+  comment: string;
+}
+
+/** One index with its columns in index order. */
+export interface StructureIndex {
+  name: string;
+  columns: string[];
+  unique: boolean;
+  /** BTREE, HASH, FULLTEXT, SPATIAL. */
+  type: string;
+}
+
+export interface StructureForeignKey {
+  name: string;
+  columns: string[];
+  refSchema: string;
+  refTable: string;
+  refColumns: string[];
+  onUpdate: string;
+  onDelete: string;
+}
+
+/** Everything the Structure tab shows about a table or view (`db_structure_load`). */
+export interface TableStructure {
+  view: boolean;
+  engine: string;
+  collation: string;
+  /** The server's estimate; null for views. */
+  rows: number | null;
+  bytes: number;
+  /** "48 KB" */
+  size: string;
+  columns: StructureColumn[];
+  indexes: StructureIndex[];
+  foreignKeys: StructureForeignKey[];
+  createSql: string;
+}
+
+/** A column as the Add/Edit Column sheet and New Table edit it. */
+export interface ColumnDraft {
+  name: string;
+  type: string;
+  nullable: boolean;
+  /** Empty: no default. NULL, numbers, quoted text and CURRENT_TIMESTAMP are used as written; other text is quoted. */
+  defaultText: string;
+  autoIncrement: boolean;
+  /** New Table only. */
+  primaryKey: boolean;
+  /** ON UPDATE CURRENT_TIMESTAMP */
+  onUpdateTimestamp: boolean;
+  comment: string;
+}
+
+/** Where a saved column goes ("unchanged": at the end when adding, where it was when editing). */
+export type ColumnPosition = { kind: "unchanged" } | { kind: "first" } | { kind: "after"; column: string };
+
+export type IndexKind = "index" | "unique" | "primary" | "fulltext";
+
+export interface ForeignKeyDraft {
+  /** Empty: the server names it. */
+  name: string;
+  column: string;
+  refTable: string;
+  refColumn: string;
+  onDelete: string;
+  onUpdate: string;
+}
+
+/** What the sheets' pickers offer (`db_structure_choices`). */
+export interface StructureChoices {
+  engines: string[];
+  collations: { name: string; detail: string }[];
+  defaultCollation: string;
+  rules: string[];
+}
+
+/** `db_structure_check_name`: the name's problem, and whether it needs no quoting. */
+export interface NameCheck {
+  problem: string | null;
+  plain: boolean;
+}

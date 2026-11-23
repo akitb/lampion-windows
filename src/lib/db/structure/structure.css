@@ -1,0 +1,47 @@
+/* Colours of the Structure tab and its sheets (`.st` scope): the macOS system colours, dark values
+   measured from the screenshots like app.css's. Tiles use `--st-<tint>` with `--st-<tint>-top`. */
+.st {
+  --st-blue: #007aff;
+  --st-green: var(--green);
+  --st-orange: #ff9500;
+  --st-purple: #af52de;
+  --st-yellow: #e6b800;
+  --st-teal: #30b0c7;
+  --st-pink: #ff2d55;
+  --st-gray: #8e8e93;
+  --st-indigo: #5856d6;
+  --st-blue-top: color-mix(in srgb, var(--st-blue) 72%, white);
+  --st-orange-top: color-mix(in srgb, var(--st-orange) 72%, white);
+  --st-purple-top: color-mix(in srgb, var(--st-purple) 72%, white);
+  --st-gray-top: color-mix(in srgb, var(--st-gray) 72%, white);
+  --st-indigo-top: color-mix(in srgb, var(--st-indigo) 72%, white);
+  /* Lines between rows (cards) and around the sheet footer. */
+  --st-sep: rgba(0, 0, 0, 0.1);
+  /* The grouped boxes of a sheet and their row separators. */
+  --st-group: var(--surface-3);
+  --st-group-sep: rgba(0, 0, 0, 0.07);
+  /* The keyboard focus ring of text fields. */
+  --st-focus: color-mix(in srgb, var(--accent) 50%, transparent);
+}
+
+@media (prefers-color-scheme: dark) {
+  .st {
+    --st-blue: #3f8ff7;
+    --st-orange: #f09748;
+    --st-purple: #ca43ea;
+    --st-yellow: #f8d849;
+    --st-teal: #5fcfdd;
+    --st-pink: #eb4b63;
+    --st-gray: #98989d;
+    --st-indigo: #707bf7;
+    --st-blue-top: #57abff;
+    --st-orange-top: #feb269;
+    --st-purple-top: #de61fc;
+    --st-gray-top: #b4b5b8;
+    --st-indigo-top: #96a0ff;
+    --st-sep: rgba(255, 255, 255, 0.1);
+    --st-group: #252628;
+    --st-group-sep: rgba(255, 255, 255, 0.045);
+    --st-focus: rgba(72, 143, 210, 0.6);
+  }
+}
