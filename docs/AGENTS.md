@@ -65,12 +65,17 @@ Shared files you may only *append to* in your own marked place:
   `CREATE_NO_WINDOW` for every child process, never write to Program Files or OneDrive.
 - No placeholder UI or TODO stubs left in your area when you finish.
 
-## Build and check
+## Build and check (this is the owner's everyday PC: keep the load low)
 
-- Shared Cargo target dir: set `CARGO_TARGET_DIR=C:\Users\akit\lampion-target` (saves disk and time;
-  Cargo locks it, so builds may wait for each other).
-- `cd src-tauri && cargo check` and `cargo test <your module>`; `npm run check` for Svelte/TS.
-- Rust toolchain: `%USERPROFILE%\.cargo\bin` (add to PATH in Git Bash: `export PATH="$HOME/.cargo/bin:$PATH"`).
-- Do not run `npm run tauri dev`/`build` concurrently with others unless you need to see the app; if you do,
-  close it afterwards.
+- **Never launch the app**: no `npm run tauri dev`, no `npm run tauri build`, no running `lampion.exe`,
+  no `npm run dev`. The owner allows launching only after a full review and their explicit OK; the lead does that.
+- **Never start servers or download server packages** (Apache/PHP/MariaDB) on this machine. Test logic with unit
+  tests, temp dirs (`tempfile`) and fake files instead.
+- Run Cargo from **PowerShell**, not Git Bash (Git Bash's `link.exe` shadows the MSVC linker):
+  `$env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"; $env:CARGO_TARGET_DIR = "C:\Users\akit\lampion-target"; $env:CARGO_BUILD_JOBS = "2"`
+  then `cd src-tauri; cargo check` and `cargo test <your module>`. Always `CARGO_BUILD_JOBS=2`.
+- The shared target dir saves disk and time; Cargo locks it, so a build may wait for another one. That is fine.
+- `npm install` once in your checkout, then `npm run check` for Svelte/TS.
+- Do not add crates whose build scripts the antivirus blocks (`rfd` / `tauri-plugin-dialog` is blocked: use
+  `core.pickPath` / `crate::core::dialog` for file and folder pickers).
 - Commit your work on your branch in small logical commits (English messages). Never push.
