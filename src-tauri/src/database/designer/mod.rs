@@ -5,7 +5,6 @@
 pub mod positions;
 pub mod relation;
 
-use crate::database::client::literal;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 
@@ -69,9 +68,10 @@ impl Schema {
     }
 }
 
-/// Tables, columns and foreign keys of `db`: three statements sent as one round trip.
+/// Tables, columns and foreign keys of `db`: three statements sent as one round trip. The name goes in as a
+/// hex literal, which reads the same in every sql_mode (NO_BACKSLASH_ESCAPES changes what `\'` means).
 pub fn load_sql(db: &str) -> String {
-    let s = literal(db);
+    let s = format!("X'{}'", hex::encode(db));
     format!(
         "SELECT TABLE_NAME, TABLE_TYPE, IFNULL(ENGINE,'') FROM information_schema.TABLES \
          WHERE TABLE_SCHEMA = {s} ORDER BY TABLE_NAME;\n\
@@ -238,10 +238,10 @@ mod tests {
 
     #[test]
     fn load_sql_reads_everything_in_one_round_trip() {
-        let sql = load_sql("o'brien");
+        let sql = load_sql("o'b\\");
         assert_eq!(sql.matches("SELECT ").count(), 3);
         assert_eq!(sql.matches(";\n").count(), 2);
-        assert_eq!(sql.matches("TABLE_SCHEMA = 'o\\'brien'").count(), 3);
+        assert_eq!(sql.matches("TABLE_SCHEMA = X'6f27625c'").count(), 3, "quotes and backslashes can't break out");
         assert!(sql.contains("REFERENTIAL_CONSTRAINTS"));
     }
 }
