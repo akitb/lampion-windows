@@ -10,9 +10,14 @@ use crate::database::commands::data::run::{self, Session};
 use structure::load::{self, TableStructure};
 use structure::sql::{self, Choices, ColumnDraft, ForeignKeyDraft, IndexKind, NameCheck, Position};
 
+/// `literal()` escapes with backslashes: under NO_BACKSLASH_ESCAPES a comment or default with `\` would be
+/// stored differently than typed. The pool resets the session when the connection goes back.
+const BACKSLASH_ESCAPES: &str = "SET SESSION sql_mode = REPLACE(@@sql_mode, 'NO_BACKSLASH_ESCAPES', '')";
+
 /// Runs the statements of one change on one connection, as one console line.
 async fn change(statements: &[String]) -> Result<(), String> {
     let mut s = Session::open().await?;
+    run::statement(&mut s.conn, BACKSLASH_ESCAPES, &[]).await?;
     let mut result = Ok(());
     for q in statements {
         if let Err(e) = s.text(q).await {
