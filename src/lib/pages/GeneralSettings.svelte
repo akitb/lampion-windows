@@ -41,7 +41,15 @@
     call<boolean>("servers_moving").then((v) => (moving = moving || v)).catch(() => {});
     void refresh();
     const off = on<Settings>("settings://changed", (s) => (settings = s));
-    return () => void off.then((f) => f());
+    // A move started before this page opened ends here too (the page that started it is gone).
+    const offMoving = on<boolean>("servers://moving", (v) => {
+      moving = v;
+      if (!v) void refresh();
+    });
+    return () => {
+      void off.then((f) => f());
+      void offMoving.then((f) => f());
+    };
   });
 
   async function set(patch: Partial<Settings>) {
