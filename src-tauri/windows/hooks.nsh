@@ -3,7 +3,8 @@
 ; - Installs into %LOCALAPPDATA%\Programs\Lampion, without administrator rights. Tauri's per-user default,
 ;   %LOCALAPPDATA%\Lampion, is the folder of Lampion's own log, settings caches and downloaded updates.
 ; - Offers the Microsoft Visual C++ 2015-2022 runtime (x64) that Apache and PHP need, when it is missing
-;   (not during an update). Lampion's first setup offers it again if it was declined here.
+;   (not during an update), and runs the download only when Windows confirms that Microsoft signed it.
+;   Lampion's first setup offers it again if it was declined or refused here.
 ; - Uninstalling removes the LampionApache and LampionMariaDB Windows services, if they were installed, and
 ;   says that the Lampion folder (C:\Lampion: servers, websites, databases) is kept.
 ;
@@ -36,15 +37,32 @@ FunctionEnd
       NSISdl::download "https://aka.ms/vc14/vc_redist.x64.exe" "$TEMP\lampion_vc_redist.x64.exe"
       Pop $1
       ${If} $1 == "success"
-        DetailPrint "Installing the Visual C++ runtime (Windows asks for permission)..."
-        ExecWait '"$TEMP\lampion_vc_redist.x64.exe" /install /passive /norestart' $2
-        Delete "$TEMP\lampion_vc_redist.x64.exe"
-        ${If} $2 = 0
-        ${OrIf} $2 = 1638
-        ${OrIf} $2 = 3010
-          DetailPrint "The Visual C++ runtime is installed."
+        ; Runs with administrator rights, so only a valid Authenticode signature of Microsoft Corporation with a
+        ; chain that ends in a Microsoft root will do (Lampion's own setup checks the same). The path reaches
+        ; PowerShell through the environment, so no character in it can break the command; any answer but 0
+        ; ("error" included) counts as not signed.
+        Push "$TEMP\lampion_vc_redist.x64.exe"
+        System::Call 'kernel32::SetEnvironmentVariable(t "LAMPION_VC_REDIST", t s)'
+        nsExec::Exec `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -Command "$$s = Get-AuthenticodeSignature -LiteralPath $$env:LAMPION_VC_REDIST; $$c = $$s.SignerCertificate; if ($$s.Status -eq 'Valid' -and $$c.GetNameInfo('SimpleName', $$false) -eq 'Microsoft Corporation') { $$ch = New-Object Security.Cryptography.X509Certificates.X509Chain; $$ch.ChainPolicy.RevocationMode = 'NoCheck'; [void]$$ch.Build($$c); if ($$ch.ChainElements[$$ch.ChainElements.Count - 1].Certificate.GetNameInfo('SimpleName', $$false) -like 'Microsoft *') { exit 0 } }; exit 1"`
+        Pop $3
+        ${If} $3 == "0"
+          DetailPrint "Installing the Visual C++ runtime (Windows asks for permission)..."
+          ExecWait '"$TEMP\lampion_vc_redist.x64.exe" /install /passive /norestart' $2
+          Delete "$TEMP\lampion_vc_redist.x64.exe"
+          ${If} $2 = 0
+          ${OrIf} $2 = 1638
+          ${OrIf} $2 = 3010
+            DetailPrint "The Visual C++ runtime is installed."
+          ${Else}
+            DetailPrint "The Visual C++ runtime was not installed (code $2). Lampion offers it again when it sets up the servers."
+          ${EndIf}
         ${Else}
-          DetailPrint "The Visual C++ runtime was not installed (code $2). Lampion offers it again when it sets up the servers."
+          Delete "$TEMP\lampion_vc_redist.x64.exe"
+          DetailPrint "The downloaded Visual C++ runtime installer is not validly signed by Microsoft, so it was not run."
+          ${If} $PassiveMode <> 1
+            MessageBox MB_YESNO|MB_ICONEXCLAMATION "The downloaded Microsoft Visual C++ runtime installer is not validly signed by Microsoft, so Lampion did not run it.$\r$\n$\r$\nApache and PHP need this runtime. Download it yourself from Microsoft's page:$\r$\nhttps://learn.microsoft.com/cpp/windows/latest-supported-vc-redist$\r$\n$\r$\nOpen the page now? (Lampion also offers the runtime again when it sets up the servers.)" /SD IDNO IDNO +2
+            ExecShell "open" "https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist"
+          ${EndIf}
         ${EndIf}
       ${Else}
         DetailPrint "The Visual C++ runtime could not be downloaded ($1). Lampion offers it again when it sets up the servers."
