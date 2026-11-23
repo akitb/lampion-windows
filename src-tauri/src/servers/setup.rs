@@ -7,6 +7,7 @@
 use super::download::{self, CANCELLED};
 use super::manifest::{self, Package, VcRuntime};
 use super::{configs, control, elevate, monitor, php, Server};
+use crate::app::trust;
 use crate::core::{activity, emit, paths, settings, shell};
 use once_cell::sync::Lazy;
 use serde::Serialize;
@@ -674,9 +675,17 @@ fn install_runtime_now(root: &Path) -> Result<(), String> {
     step(root, "Downloading the Microsoft Visual C++ runtime", "", Some(0.0), true);
     let mut report = download_progress();
     tauri::async_runtime::block_on(download::fetch(&[vc.url.as_str()], &file, None, &CANCEL, &mut report))?;
+    // It runs with administrator rights: only Microsoft's own, unchanged from the check until it has run.
+    let held = trust::hold(&file).map_err(|e| format!("Could not open {}: {e}", file.display()))?;
+    if !trust::signed_by_microsoft(&file) {
+        drop(held);
+        let _ = std::fs::remove_file(&file);
+        return Err("The downloaded Visual C++ runtime installer is not validly signed by Microsoft, so Lampion did not run it.".into());
+    }
     step(root, "Installing the Microsoft Visual C++ runtime", "Windows asks for permission to install it.", None, false);
     activity::info("Setup", "Installing the Microsoft Visual C++ runtime (Windows asks for permission)…");
     let code = elevate::run(&file, "/install /passive /norestart", Duration::from_secs(900));
+    drop(held);
     let _ = std::fs::remove_file(&file);
     match code? {
         0 | 1638 => activity::ok("Setup", "The Visual C++ runtime is installed"),

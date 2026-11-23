@@ -10,8 +10,10 @@ use std::time::Duration;
 
 pub const CANCELLED: &str = "Setup was cancelled.";
 
+/// HTTPS only, redirects included (the package list and the VC++ runtime come through redirects).
 pub fn client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
+        .https_only(true)
         .user_agent(concat!("Lampion/", env!("CARGO_PKG_VERSION")))
         .connect_timeout(Duration::from_secs(20))
         .read_timeout(Duration::from_secs(60))
@@ -195,6 +197,12 @@ mod tests {
         assert!(sha256_matches(&digest, "BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD "));
         assert!(!sha256_matches(&digest, &sha256_hex(b"abd")));
         assert_eq!(sha256_file(&dir.path().join("missing")), None);
+    }
+
+    #[test]
+    fn downloads_are_https_only() {
+        let sent = tauri::async_runtime::block_on(client().unwrap().get("http://127.0.0.1:9/vc_redist.x64.exe").send());
+        assert!(sent.unwrap_err().is_builder(), "refused before any connection is made");
     }
 
     fn make_zip(path: &Path, entries: &[(&str, &str)]) {
