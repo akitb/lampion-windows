@@ -48,7 +48,7 @@
   });
 
   const choose = { value: "", label: "Choose…" };
-  const columnOptions = $derived([choose, ...data.columns.map((c) => ({ value: c.name, label: `${c.name}   ${c.type}` }))]);
+  const columnOptions = $derived([choose, ...data.columns.map((c) => ({ value: c.name, label: `${c.name}\u00a0\u00a0\u00a0${c.type}` }))]);
   const tableOptions = $derived([choose, ...tables.map((t) => ({ value: t, label: t }))]);
   const refOptions = $derived([choose, ...refColumns.map((c) => ({ value: c, label: c }))]);
   const rules = $derived(choices.rules.map((r) => ({ value: r, label: r })));

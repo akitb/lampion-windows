@@ -35,11 +35,10 @@
     try {
       const created = await structure.createDatabase(name, collation);
       schemaChanged();
-      // Select it, like clicking it in the sidebar.
+      // Select it, like clicking it in the sidebar (the window picks the tab).
       db.database = created;
       db.table = null;
       db.isView = false;
-      if (db.tab !== "query" && db.tab !== "designer") db.tab = "tables";
       frame?.close();
     } catch (e) {
       showError(message(e));
