@@ -122,12 +122,16 @@ PHPIniDir "@ROOT@/config"
     SetHandler application/x-httpd-php
 </FilesMatch>
 
-# phpMyAdmin at /phpmyadmin, from this computer only.
+# phpMyAdmin at /phpmyadmin, from this computer only. The Host check stops web pages from other sites
+# reaching it through a name that points at 127.0.0.1 (DNS rebinding).
 Alias /phpmyadmin "@ROOT@/bin/phpmyadmin"
 <Directory "@ROOT@/bin/phpmyadmin">
     Options FollowSymLinks
     AllowOverride None
-    Require local
+    <RequireAll>
+        Require local
+        Require expr "%{HTTP_HOST} =~ /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/"
+    </RequireAll>
 </Directory>
 "#;
 
@@ -461,14 +465,29 @@ mod tests {
         assert!(c.contains("\r\nLoadModule rewrite_module"));
         assert!(c.contains("DirectoryIndex index.php index.html"));
         assert!(c.contains("Alias /phpmyadmin \"C:/My Lampion/bin/phpmyadmin\""));
-        assert!(c.contains("Require local"));
+        assert!(c.contains("    <RequireAll>\r\n        Require local\r\n        Require expr \"%{HTTP_HOST} =~ /"));
         assert!(c.contains("ErrorLog \"C:/My Lampion/logs/apache/error.log\""));
         assert!(c.contains("CustomLog \"C:/My Lampion/logs/apache/access.log\" combined"));
         assert!(c.contains("ServerRoot \"${SRVROOT}\""));
-        assert!(!c.contains('\\') || c.lines().all(|l| !l.contains(":\\")), "no backslash paths");
+        assert!(!regex::Regex::new(r"[A-Za-z]:\\").unwrap().is_match(&c), "no backslash paths");
         assert!(!c.replace("\r\n", "").contains('\n'), "CRLF only");
         assert_eq!(listen_ports(&c), vec![8080]);
         assert_eq!(apache_pid_file(&c, Path::new(r"C:\My Lampion\bin\apache")), PathBuf::from(r"C:\My Lampion\logs\apache\httpd.pid"));
+    }
+
+    #[test]
+    fn phpmyadmin_answers_only_to_this_computers_names() {
+        // The expression Apache evaluates (ap_expr regexes are PCRE; this one reads the same in Rust).
+        let c = httpd_conf(Path::new(r"C:\Lampion"), 8080);
+        let line = c.lines().find(|l| l.contains("Require expr")).unwrap();
+        let pattern = line.split(" =~ /").nth(1).unwrap().trim_end_matches("/\"");
+        let host = regex::Regex::new(pattern).unwrap();
+        for ok in ["localhost", "localhost:8080", "127.0.0.1", "127.0.0.1:8080", "[::1]:8080"] {
+            assert!(host.is_match(ok), "{ok}");
+        }
+        for bad in ["evil.example", "localhost.evil.example", "127.0.0.1.nip.io:8080", "127x0x0x1", "localhost:8080@evil", ""] {
+            assert!(!host.is_match(bad), "{bad}");
+        }
     }
 
     #[test]

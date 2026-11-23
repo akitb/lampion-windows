@@ -1,6 +1,7 @@
 //! phpMyAdmin's config.inc.php: automatic sign-in as root (auth_type 'config') or the login page.
 //! phpMyAdmin talks to MariaDB over TCP (127.0.0.1 and the real port). Only this computer can open
-//! phpMyAdmin: that is Apache's `Require local` on the /phpmyadmin alias.
+//! phpMyAdmin: that is Apache's `Require local` plus a Host check (against DNS rebinding) on the
+//! /phpmyadmin alias, in one `<RequireAll>` block that the Apache page never changes.
 
 use super::file::{self, indent, Doc, Run};
 use crate::core::{activity, paths, settings};

@@ -566,6 +566,25 @@ LogLevel warn rewrite:trace3\r\n\
     }
 
     #[test]
+    fn saves_never_touch_phpmyadmins_block() {
+        // Its <RequireAll> (Require local + the Host check) is what keeps phpMyAdmin to this computer.
+        let conf = crate::servers::configs::httpd_conf(Path::new(r"C:\Lampion"), 8080);
+        let block = |t: &str| t[t.find("Alias /phpmyadmin").unwrap()..].split("</Directory>").next().unwrap().to_string();
+        let base = parse(&conf);
+        let dir = tempfile::tempdir().unwrap();
+        for draft in [
+            ApacheSettings { port: "9090".into(), allow_override: false, directory_listing: false, log_level: "debug".into(), ..base.clone() },
+            ApacheSettings { document_root: dir.path().display().to_string(), server_admin: "me@example.com".into(), ..base.clone() },
+            ApacheSettings { document_root: r"C:\Lampion\bin\phpmyadmin".into(), directory_listing: false, ..base.clone() },
+            ApacheSettings { modules: base.modules.keys().map(|k| (k.clone(), true)).collect(), ..base.clone() },
+        ] {
+            let out = apply(&conf, &base, &draft);
+            assert_ne!(out, conf);
+            assert_eq!(block(&out), block(&conf), "{draft:?}");
+        }
+    }
+
+    #[test]
     fn port_change_keeps_address_and_server_name_follows() {
         let (base, draft) = with(|s| s.port = "9090".into());
         let out = apply(CONF, &base, &draft);
