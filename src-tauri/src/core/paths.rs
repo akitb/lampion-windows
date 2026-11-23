@@ -55,6 +55,11 @@ pub fn local_data() -> PathBuf {
     d
 }
 
+/// Windows PowerShell by its full path, never whichever `powershell.exe` a search finds first.
+pub fn powershell_exe() -> PathBuf {
+    PathBuf::from(std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into())).join(r"System32\WindowsPowerShell\v1.0\powershell.exe")
+}
+
 /// A Windows path with forward slashes, as Apache, PHP and MariaDB configs want it.
 pub fn fwd(p: &Path) -> String {
     p.to_string_lossy().replace('\\', "/")
@@ -83,6 +88,11 @@ mod tests {
     #[test]
     fn forward_slashes() {
         assert_eq!(fwd(Path::new(r"C:\Lampion\www")), "C:/Lampion/www");
+    }
+    #[test]
+    fn powershell_by_its_full_path() {
+        let p = powershell_exe();
+        assert!(p.is_absolute() && p.ends_with(r"System32\WindowsPowerShell\v1.0\powershell.exe"), "{}", p.display());
     }
     #[test]
     fn unsafe_locations() {

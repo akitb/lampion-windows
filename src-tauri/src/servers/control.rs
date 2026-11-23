@@ -11,6 +11,7 @@ use super::{configs, monitor, services, Server};
 use crate::config::locations::{self, Locations};
 use crate::core::{activity, paths, settings, shell};
 use once_cell::sync::Lazy;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Mutex};
 use std::time::Duration;
@@ -347,15 +348,14 @@ fn launch(s: Server) -> Result<(), String> {
         return services::start(s).map_err(|e| fail(s.module(), e));
     }
     let (exe, dir) = match s {
-        Server::Apache => {
-            php_on_path();
-            (paths::httpd_exe(), paths::apache_dir())
-        }
+        Server::Apache => (paths::httpd_exe(), paths::apache_dir()),
         Server::Mariadb => (paths::mariadbd_exe(), paths::mariadb_dir()),
     };
     let args = launch_args(s, &paths::httpd_conf(), &paths::my_ini());
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
-    shell::spawn_detached(&exe, &args, Some(dir.as_path()))
+    let path = (s == Server::Apache).then(|| php_first_path(&paths::php_dir(), &std::env::var_os("PATH").unwrap_or_default()));
+    let env: Vec<(&str, &OsStr)> = path.iter().map(|p| ("PATH", p.as_os_str())).collect();
+    shell::spawn_detached_env(&exe, &args, Some(dir.as_path()), &env)
         .map(|_| ())
         .map_err(|e| fail(s.module(), format!("Could not run {}: {e}", exe.display())))
 }
@@ -370,22 +370,19 @@ pub fn launch_args(s: Server, httpd_conf: &Path, my_ini: &Path) -> Vec<String> {
     }
 }
 
-/// php8apache2_4.dll and PHP's extensions need DLLs from PHP's folder (libssh2, libcrypto, ICU…).
-/// Windows finds them through PATH, as PHP's manual advises, so PHP's folder goes first in Lampion's
-/// own PATH, which the Apache it starts inherits.
-fn php_on_path() {
-    let php = paths::php_dir();
-    let current = std::env::var_os("PATH").unwrap_or_default();
-    let mut dirs: Vec<PathBuf> = std::env::split_paths(&current).collect();
-    let same = |d: &PathBuf| d.to_string_lossy().eq_ignore_ascii_case(&php.to_string_lossy());
-    if dirs.first().is_some_and(same) {
-        return;
-    }
-    dirs.retain(|d| !same(d));
-    dirs.insert(0, php);
-    if let Ok(joined) = std::env::join_paths(dirs) {
-        std::env::set_var("PATH", joined);
-    }
+/// php8apache2_4.dll and PHP's extensions need DLLs from PHP's folder (libssh2, libcrypto, ICU…), which
+/// Windows finds through PATH, as PHP's manual advises: the Apache Lampion starts gets `current` with
+/// PHP's folder first. Lampion's own PATH is left alone (every other program it runs inherits it).
+pub fn php_first_path(php: &Path, current: &OsStr) -> OsString {
+    let same = |d: &PathBuf| d.to_string_lossy().trim_end_matches('\\').eq_ignore_ascii_case(php.to_string_lossy().trim_end_matches('\\'));
+    let mut dirs: Vec<PathBuf> = std::env::split_paths(current).filter(|d| !d.as_os_str().is_empty() && !same(d)).collect();
+    dirs.insert(0, php.to_path_buf());
+    std::env::join_paths(dirs).unwrap_or_else(|_| {
+        let mut joined = php.as_os_str().to_owned();
+        joined.push(";");
+        joined.push(current);
+        joined
+    })
 }
 
 /// `httpd.exe -t`: a configuration Apache rejects is never started.
@@ -734,6 +731,17 @@ mod tests {
         assert_eq!(launch_args(Server::Apache, conf, ini), ["-f", r"C:\My Lampion\config\httpd.conf"]);
         let maria = launch_args(Server::Mariadb, conf, ini);
         assert_eq!(maria, [r"--defaults-file=C:\My Lampion\config\my.ini"], "nothing may override my.ini");
+    }
+
+    #[test]
+    fn only_apache_gets_php_first_on_its_path() {
+        let php = Path::new(r"C:\My Lampion\bin\php");
+        let path = php_first_path(php, OsStr::new(r"C:\Windows\system32;c:\my lampion\bin\php\;C:\Tools"));
+        assert_eq!(path, OsString::from(r"C:\My Lampion\bin\php;C:\Windows\system32;C:\Tools"), "first, and only once");
+        assert_eq!(php_first_path(php, OsStr::new("")), OsString::from(r"C:\My Lampion\bin\php"));
+        let before = std::env::var_os("PATH");
+        let _ = php_first_path(php, OsStr::new(r"C:\Windows"));
+        assert_eq!(std::env::var_os("PATH"), before, "Lampion's own PATH is untouched");
     }
 
     #[test]

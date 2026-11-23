@@ -1,5 +1,6 @@
 //! Running programs without a console window.
 
+use std::ffi::OsStr;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -77,8 +78,13 @@ pub fn output(mut cmd: Command, timeout: Duration) -> Output {
 
 /// Starts a program in the background, detached from Lampion and without a window. Returns its PID.
 pub fn spawn_detached(program: impl AsRef<Path>, args: &[&str], cwd: Option<&Path>) -> std::io::Result<u32> {
+    spawn_detached_env(program, args, cwd, &[])
+}
+
+/// `spawn_detached` with environment variables for the child only (Lampion's own stay as they are).
+pub fn spawn_detached_env(program: impl AsRef<Path>, args: &[&str], cwd: Option<&Path>, env: &[(&str, &OsStr)]) -> std::io::Result<u32> {
     let mut cmd = Command::new(program.as_ref());
-    cmd.args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    cmd.args(args).envs(env.iter().copied()).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
     if let Some(d) = cwd {
         cmd.current_dir(d);
     }

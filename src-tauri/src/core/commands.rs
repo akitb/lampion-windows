@@ -55,19 +55,29 @@ pub fn open_url(url: String) -> Result<(), String> {
     tauri_plugin_opener::open_url(url, None::<&str>).map_err(|e| e.to_string())
 }
 
-/// Windows Terminal in `dir` if installed, else PowerShell.
+/// Windows Terminal in `dir` if installed, else PowerShell (both by their full path).
 #[tauri::command]
 pub fn open_terminal(dir: String) -> Result<(), String> {
-    let wt = std::process::Command::new("wt.exe").args(["-d", &dir]).spawn();
-    if wt.is_ok() {
-        return Ok(());
+    if !std::path::Path::new(&dir).is_dir() {
+        return Err(format!("{dir} is not a folder."));
     }
-    std::process::Command::new("powershell.exe")
+    // The App Execution Alias Windows Terminal installs for every user.
+    if let Some(wt) = dirs::data_local_dir().map(|d| d.join(r"Microsoft\WindowsApps\wt.exe")) {
+        if std::process::Command::new(wt).args(wt_args(&dir)).spawn().is_ok() {
+            return Ok(());
+        }
+    }
+    std::process::Command::new(paths::powershell_exe())
         .args(["-NoExit", "-Command", &format!("Set-Location -LiteralPath '{}'", dir.replace('\'', "''"))])
         .current_dir(&dir)
         .spawn()
         .map(|_| ())
         .map_err(|e| e.to_string())
+}
+
+/// `wt.exe -d <dir>`. Windows Terminal reads an unescaped `;` anywhere as "and then run this", so it is escaped.
+fn wt_args(dir: &str) -> [String; 2] {
+    ["-d".into(), dir.replace(';', r"\;")]
 }
 
 /// Native dialog. `kind`: "folder" | "open" | "save". `filter`: [label, "*.sql;*.txt"]. `None` = cancelled.
@@ -108,4 +118,16 @@ pub async fn open_database_window(app: AppHandle) -> Result<(), String> {
         .build()
         .map(|_| ())
         .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_semicolon_in_the_folder_cannot_start_another_command() {
+        assert_eq!(wt_args(r"C:\Lampion\www"), ["-d", r"C:\Lampion\www"]);
+        assert_eq!(wt_args(r"C:\a;calc.exe"), ["-d", r"C:\a\;calc.exe"]);
+        assert!(open_terminal(r"C:\no such folder\x".into()).is_err(), "only an existing folder");
+    }
 }

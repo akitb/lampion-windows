@@ -2,7 +2,7 @@
 //! PowerShell's `Start-Process -Verb RunAs` (passed as `-EncodedCommand`, so no quoting problems and no
 //! execution policy), which needs no extra Windows API bindings.
 
-use crate::core::shell;
+use crate::core::{paths, shell};
 use std::path::Path;
 use std::time::Duration;
 
@@ -14,7 +14,7 @@ pub const DECLINED: i32 = 1223;
 pub fn run(program: &Path, args: &str, timeout: Duration) -> Result<i32, String> {
     let script = script(program, args);
     let encoded = base64(&script.encode_utf16().flat_map(u16::to_le_bytes).collect::<Vec<u8>>());
-    let out = shell::run_timeout("powershell.exe", &["-NoProfile", "-NonInteractive", "-EncodedCommand", &encoded], timeout);
+    let out = shell::run_timeout(paths::powershell_exe(), &["-NoProfile", "-NonInteractive", "-EncodedCommand", &encoded], timeout);
     match out.status {
         -1 => Err(format!("Could not ask Windows for administrator rights: {}", out.out.trim())),
         9999 => Err(format!("Windows could not run {}: {}", program.display(), out.out.trim())),
