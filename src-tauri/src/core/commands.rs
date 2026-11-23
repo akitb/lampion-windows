@@ -56,14 +56,38 @@ pub fn activity_lines() -> Vec<activity::Line> {
     activity::all()
 }
 
-/// Opens a file or folder in Explorer (or its default app).
+/// The files `open_path` opens (in their editor or viewer); everything else that is not a folder is
+/// refused, as "opening" a program, script or shortcut runs it.
+const OPENABLE: [&str; 13] = ["txt", "log", "err", "conf", "ini", "cnf", "json", "md", "sql", "csv", "xml", "yml", "yaml"];
+
+/// A folder, or a text, config or log file.
+fn openable(path: &std::path::Path) -> Result<(), String> {
+    let ext = path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+    if path.is_dir() || (path.is_file() && OPENABLE.contains(&ext.as_str())) {
+        Ok(())
+    } else {
+        Err(format!("Lampion opens only folders and text, config or log files, not {}.", path.display()))
+    }
+}
+
+/// Opens a folder in Explorer, or a text, config or log file in its default app.
 #[tauri::command]
 pub fn open_path(path: String) -> Result<(), String> {
+    openable(std::path::Path::new(&path))?;
     tauri_plugin_opener::open_path(path, None::<&str>).map_err(|e| e.to_string())
+}
+
+/// Web pages only (a `file:` URL would run what it points at).
+fn web_url(url: &str) -> bool {
+    let u = url.trim_start().to_ascii_lowercase();
+    u.starts_with("https://") || u.starts_with("http://")
 }
 
 #[tauri::command]
 pub fn open_url(url: String) -> Result<(), String> {
+    if !web_url(&url) {
+        return Err(format!("Lampion opens only web addresses (http or https), not {url}."));
+    }
     tauri_plugin_opener::open_url(url, None::<&str>).map_err(|e| e.to_string())
 }
 
@@ -141,6 +165,26 @@ mod tests {
         assert_eq!(wt_args(r"C:\Lampion\www"), ["-d", r"C:\Lampion\www"]);
         assert_eq!(wt_args(r"C:\a;calc.exe"), ["-d", r"C:\a\;calc.exe"]);
         assert!(open_terminal(r"C:\no such folder\x".into()).is_err(), "only an existing folder");
+    }
+
+    #[test]
+    fn only_folders_and_text_files_are_opened() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(openable(dir.path()).is_ok());
+        for ok in ["error.log", "MARIADB.ERR", "httpd.conf", "php.ini", "README.txt"] {
+            std::fs::write(dir.path().join(ok), "").unwrap();
+            assert!(openable(&dir.path().join(ok)).is_ok(), "{ok}");
+        }
+        for bad in ["setup.exe", "run.bat", "run.cmd", "x.com", "x.ps1", "x.vbs", "x.js", "x.msi", "x.lnk", "x.scr", "index.php", "page.html", "noext"] {
+            std::fs::write(dir.path().join(bad), "").unwrap();
+            assert!(openable(&dir.path().join(bad)).is_err(), "{bad}");
+        }
+        assert!(openable(&dir.path().join("missing.txt")).is_err());
+        assert!(open_path(dir.path().join("setup.exe").display().to_string()).is_err(), "refused before anything opens");
+        assert!(web_url("https://github.com/akitb/lampion-windows/releases") && web_url("http://localhost:8080/"));
+        for bad in ["file:///C:/Windows/System32/calc.exe", r"C:\Windows\System32\calc.exe", "ms-settings:", "javascript:alert(1)"] {
+            assert!(!web_url(bad) && open_url(bad.into()).is_err(), "{bad}");
+        }
     }
 
     #[test]
