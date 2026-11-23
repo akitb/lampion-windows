@@ -45,8 +45,10 @@ pub fn add(module: &str, text: &str, level: Level) {
             l.pop_front();
         }
     }
+    // Unit tests never write into the user's real Lampion.log.
     let path = super::paths::local_data().join("Lampion.log");
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+    if cfg!(test) {
+    } else if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
         let tag = match level {
             Level::Info => "info",
             Level::Ok => "ok",
