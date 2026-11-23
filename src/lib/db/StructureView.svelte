@@ -20,9 +20,13 @@
 
   let { database, table = null }: { database: string; table?: string | null } = $props();
 
-  let data = $state<TableStructure | null>(null);
+  // A tab switch mounts this view again: start from what it showed of the same table, then refresh.
+  // svelte-ignore state_referenced_locally
+  const cached = shown.data && shown.database === database && shown.table === table ? shown.data : null;
+  let data = $state<TableStructure | null>(cached);
   /** Which table `data` is about ("database.table"). */
-  let loadedFor = $state("");
+  // svelte-ignore state_referenced_locally
+  let loadedFor = $state(cached ? `${database}.${table}` : "");
   let loadError = $state<string | null>(null);
   let showCreate = $state(false);
   let segments = $state<Segment[] | null>(null);
@@ -189,6 +193,7 @@
       {/if}
     </div>
 
+    {#if data || loadError}
     <section class="card" aria-labelledby="st-columns">
       <header class="card-head">
         <IconTile icon={Columns3} tint="var(--st-blue)" top="var(--st-blue-top)" size={24} glyph={0.46} />
@@ -200,7 +205,7 @@
         {/if}
       </header>
       {#if !columns.length}
-        <p class="empty">{loadError ?? (data ? "No columns to show." : "")}</p>
+        <p class="empty">{loadError ?? "No columns to show."}</p>
       {:else}
         <div class="grid cols heading" class:ro={!canEdit} aria-hidden="true">
           <span class="num">#</span><span>Name</span><span>Type</span><span>Keys</span><span>Default</span>
@@ -328,6 +333,7 @@
         <button type="button" class="reveal" onclick={() => (showCreate = true)}>The SQL that creates this {view ? "view" : "table"}. Click to show it.</button>
       {/if}
     </section>
+    {/if}
   </div>
 </div>
 
