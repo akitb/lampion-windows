@@ -64,6 +64,8 @@ export interface QueryRun {
   error: string | null;
   errorFrom: number | null;
   errorTo: number | null;
+  /** A result had more rows than Lampion keeps (100,000): only the first ones came. */
+  truncated: boolean;
   seconds: number;
   history: string[];
 }

@@ -8,7 +8,7 @@
   import Empty from "./Empty.svelte";
   import Grid from "./Grid.svelte";
   import { dropdown, type MenuItem } from "./menu.svelte";
-  import { clearHistory, isSystem, loadHistory, query, runQuery, ui } from "./model.svelte";
+  import { clearHistory, isSystem, loadHistory, loadTables, query, runQuery, ui } from "./model.svelte";
   import SqlEditor from "./SqlEditor.svelte";
   import { copy, count, rows as rowsText, summary } from "./util";
 
@@ -32,7 +32,15 @@
   });
 
   function databaseMenu(e: MouseEvent) {
-    const item = (name: string): MenuItem => ({ label: name, checked: query.database === name, action: () => (query.database = name) });
+    const item = (name: string): MenuItem => ({
+      label: name,
+      checked: query.database === name,
+      action: () => {
+        query.database = name;
+        // Completion knows a database's tables once they are loaded.
+        if (!server.tables[name]) loadTables(name);
+      },
+    });
     const user = server.databases.filter((d) => !isSystem(d));
     const system = server.databases.filter(isSystem);
     const items: MenuItem[] = [{ label: `Selected in sidebar (${db.database ?? "none"})`, checked: query.database === null, action: () => (query.database = null) }];
@@ -116,7 +124,7 @@
       {#if query.error}
         <span class="err"><span class="solid"><TriangleAlert size={12} strokeWidth={2.2} /></span> Error</span>
       {:else if shown}
-        <span class="sum">{query.sets.length > 1 ? `${query.sets.length} results · ${rowsText(shown.rows.length)}` : `${rowsText(shown.rows.length)} · ${shown.columns.length === 1 ? "1 column" : `${count(shown.columns.length)} columns`}`}</span>
+        <span class="sum" title={query.truncated ? "Only the first 100,000 rows of a result are shown" : undefined}>{query.truncated ? "first " : ""}{query.sets.length > 1 ? `${query.sets.length} results · ${rowsText(shown.rows.length)}` : `${rowsText(shown.rows.length)} · ${shown.columns.length === 1 ? "1 column" : `${count(shown.columns.length)} columns`}`}</span>
       {:else if query.version > 0 && query.message}
         <span class="sum">{query.message}</span>
       {:else}

@@ -72,6 +72,8 @@ class QueryState {
   errorRange = $state.raw<[number, number] | null>(null);
   /** "1 result, 7 rows · 0.091 s"; only the time after a failure. */
   message = $state("");
+  /** A result had more rows than Lampion keeps; only the first 100,000 came. */
+  truncated = $state(false);
   /** Bumped by every run. */
   version = $state(0);
   history = $state.raw<string[]>([]);
@@ -478,6 +480,7 @@ export async function runQuery() {
     const r = await dbapi.runQuery(query.database ?? db.database, text);
     const time = `${r.seconds.toFixed(3)} s`;
     query.sets = r.sets;
+    query.truncated = r.truncated;
     query.shown = 0;
     query.error = r.error;
     query.errorRange = r.error && r.errorFrom !== null && r.errorTo !== null ? [r.errorFrom, r.errorTo] : null;

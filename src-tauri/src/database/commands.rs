@@ -279,6 +279,8 @@ pub struct QueryRun {
     /// Where the error points in the text (UTF-16 offsets, as the editor counts).
     pub error_from: Option<usize>,
     pub error_to: Option<usize>,
+    /// A result set had more rows than Lampion keeps (`run::MAX_ROWS`).
+    pub truncated: bool,
     pub seconds: f64,
     /// The history with this query first.
     pub history: Vec<String>,
@@ -321,6 +323,7 @@ pub async fn db_run_query(database: Option<String>, text: String) -> Result<Quer
         match run::statement(&mut conn, stmt, &[]).await {
             Ok(outcomes) => {
                 for o in outcomes {
+                    out.truncated |= o.truncated;
                     match o.grid {
                         Some(g) => out.sets.push(g),
                         None => out.affected = Some(out.affected.unwrap_or(0) + o.affected),
