@@ -7,6 +7,7 @@
   import MoreMenu from "./MoreMenu.svelte";
   import StatusPill from "./StatusPill.svelte";
   import { app } from "$lib/state.svelte";
+  import { showLog } from "$lib/config/forms.svelte";
   import { core } from "$lib/api";
   import { actionErrors, servers } from "$lib/servers.svelte";
   import type { ServerId } from "$lib/types";
@@ -27,13 +28,13 @@
     apache
       ? [
           { label: "Settings…", run: () => (app.pane = "apache") },
-          { label: "Error Log", run: () => (app.pane = "logs") },
+          { label: "Error Log", run: () => void showLog("apacheError") },
           null,
           { label: "Edit httpd.conf", run: edit("apache") },
         ]
       : [
           { label: "Settings…", run: () => (app.pane = "mariadb") },
-          { label: "Server Log", run: () => (app.pane = "logs") },
+          { label: "Server Log", run: () => void showLog("mariadb") },
           null,
           { label: "Edit my.ini", run: edit("mariadb") },
           { label: "Edit phpMyAdmin config", run: edit("phpmyadmin") },

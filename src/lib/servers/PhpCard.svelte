@@ -5,6 +5,7 @@
   import IconTile from "$lib/components/IconTile.svelte";
   import Fact from "./Fact.svelte";
   import { app } from "$lib/state.svelte";
+  import { showLog } from "$lib/config/forms.svelte";
   import { servers } from "$lib/servers.svelte";
   import type { PhpInfo } from "$lib/types";
 
@@ -34,7 +35,7 @@
     <Fact label="Memory" value={info?.memoryLimit ?? "–"} />
     <Fact label="Upload" value={info?.uploadMaxFilesize ?? "–"} />
   </div>
-  <button class="control log" onclick={() => (app.pane = "logs")} title="PHP error log" aria-label="PHP error log">
+  <button class="control log" onclick={() => void showLog("php")} title="PHP error log" aria-label="PHP error log">
     <TextAlignStart size={17} strokeWidth={1.8} />
   </button>
   <button class="control" onclick={() => (app.pane = "php")}><SlidersHorizontal size={16} strokeWidth={1.8} /> Settings</button>
