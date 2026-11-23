@@ -3,7 +3,7 @@
 # The sandbox gets a read-only copy of the installer; results land in C:\Users\akit\lampion-sandbox\out\<time>.
 param(
   [Parameter(Mandatory = $true)][string]$Installer,
-  [ValidateSet("selftest", "interactive")][string]$Mode = "selftest"
+  [ValidateSet("selftest", "interactive", "tour")][string]$Mode = "selftest"
 )
 $ErrorActionPreference = "Stop"
 if (Get-Process WindowsSandbox, WindowsSandboxClient, WindowsSandboxRemoteSession -ErrorAction SilentlyContinue) {

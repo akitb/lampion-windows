@@ -28,7 +28,58 @@ function Save-Logs {
   if (Test-Path "C:\Lampion\logs") { Copy-Item "C:\Lampion\logs" (Join-Path $result "server-logs") -Recurse -ErrorAction SilentlyContinue }
 }
 
+Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+$shell = New-Object -ComObject WScript.Shell
+function Save-Shot([string]$name) {
+  $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+  $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+  $g = [System.Drawing.Graphics]::FromImage($bmp)
+  $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+  $bmp.Save((Join-Path $result "$name.png"), [System.Drawing.Imaging.ImageFormat]::Png)
+  $g.Dispose(); $bmp.Dispose()
+}
+function Send-ToApp([string]$title, [string]$keys) {
+  if ($shell.AppActivate($title)) { Start-Sleep -Milliseconds 400; $shell.SendKeys($keys) } else { "Window '$title' not found for $keys" }
+}
+function Test-Url([string]$url) {
+  try { $r = Invoke-WebRequest $url -UseBasicParsing -TimeoutSec 10; "$url -> $($r.StatusCode)" } catch { "$url -> $($_.Exception.Message)" }
+}
+function Run-Selftests {
+  foreach ($flag in @("--selftest", "--dbtest")) {
+    "Running $flag"
+    $t = Start-Process $exe.FullName -ArgumentList $flag -PassThru
+    if (-not $t.WaitForExit(1800000)) { "$flag timed out"; $t.Kill() }
+    "$flag exit code: $($t.ExitCode)"
+    Save-Logs
+  }
+}
+
 switch ($mode) {
+  "tour" {
+    # Start the app, let first setup run, then visit every page with its shortcut and take screenshots.
+    $app = Start-Process $exe.FullName -PassThru
+    Start-Sleep 15; Save-Shot "01-first-launch"
+    $deadline = (Get-Date).AddMinutes(20); $n = 0
+    while ((Get-Date) -lt $deadline) {
+      $ok = $false
+      try { $ok = (Invoke-WebRequest "http://localhost:8080/" -UseBasicParsing -TimeoutSec 5).StatusCode -eq 200 } catch {}
+      if ($ok) { break }
+      $n++; if ($n % 4 -eq 0) { Save-Shot ("02-setup-{0:d2}" -f $n) }
+      Start-Sleep 15
+    }
+    "Setup finished or timed out after $n checks"
+    Start-Sleep 10
+    Test-Url "http://localhost:8080/"
+    Test-Url "http://localhost:8080/phpmyadmin/"
+    $pages = [ordered]@{ "^1" = "10-overview"; "^2" = "11-logs"; "^3" = "12-apache"; "^4" = "13-php"; "^5" = "14-mariadb"; "^6" = "15-general" }
+    foreach ($k in $pages.Keys) { Send-ToApp "Lampion" $k; Start-Sleep 3; Save-Shot $pages[$k] }
+    Send-ToApp "Lampion" "^1"; Start-Sleep 2
+    Send-ToApp "Lampion" "^d"; Start-Sleep 8; Save-Shot "20-database-manager"
+    Save-Logs
+    Stop-Process -Id $app.Id -ErrorAction SilentlyContinue; Start-Sleep 5
+    Run-Selftests
+    "DONE" | Set-Content (Join-Path $result "done.txt")
+  }
   "selftest" {
     foreach ($flag in @("--selftest", "--dbtest")) {
       "Running $flag"
