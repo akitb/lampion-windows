@@ -94,11 +94,12 @@ async fn panel_checks(t: &mut Report) {
         {"name":"Lampion-9.9-setup.exe","browser_download_url":"https://example.com/a.exe","digest":"sha256:abc123"}]}"#;
     let release = updater::parse_release(sample);
     t.check(
-        release.as_ref().is_some_and(|r| r.version == "9.9" && r.url == "https://example.com/a.exe" && r.sha256.as_deref() == Some("abc123"))
+        release.as_ref().is_some_and(|r| r.version == "9.9" && r.url == "https://example.com/a.exe" && r.sha256 == ["abc123"])
             && updater::parse_release("{}").is_none(),
         "Updater reads the release and its installer from GitHub's answer",
     );
-    t.check(updater::verify_digest("aa", Some("bb")).is_err(), "Updater refuses a download with the wrong checksum");
+    t.check(updater::verify_digest("aa", &["bb".into()]).is_err(), "Updater refuses a download with the wrong checksum");
+    t.check(updater::verify_digest("aa", &[]).is_err(), "Updater refuses an installer the release gives no checksum for");
     t.check(parse::clock("23/Nov/2026:12:06:52 +0100") == Some("12:06:52"), "Logs read the time of an access log line");
 
     t.check(servers::setup::ready(), "No setup banner when everything is installed");

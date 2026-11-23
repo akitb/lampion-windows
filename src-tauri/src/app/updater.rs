@@ -1,9 +1,10 @@
 //! Updates from GitHub releases (docs/SPEC.md "Frissítés és terjesztés", Updater.swift). The newest
 //! release is offered in the update banner (`update://state`); its installer is downloaded with a
-//! cancellable progress bar to `%LOCALAPPDATA%\Lampion\updates`, checked against the SHA-256 GitHub lists
-//! for it and against its Authenticode signature when it is signed, then run silently while Lampion
-//! quits (`/S /UPDATE /R`: no new shortcuts, and the installer starts the new Lampion). The servers
-//! keep running.
+//! cancellable progress bar to `%LOCALAPPDATA%\Lampion\updates\<n>`, checked against the SHA-256 the
+//! release lists for it (GitHub's `digest`, and the "SHA-256 of the installer" line of the notes; an
+//! installer without one is never run) and against its Authenticode signature when it is signed, then
+//! run silently while Lampion quits (`/S /UPDATE /R`: no new shortcuts, and the installer starts the new
+//! Lampion). The file is hashed once more, held unchangeable, right before it runs. The servers keep running.
 
 use super::{quit, trust};
 use crate::core::{activity, emit, paths, settings, shell};
@@ -11,9 +12,9 @@ use futures_util::StreamExt;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
+use std::sync::atomic::{AtomicU64, Ordering::SeqCst};
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -41,9 +42,10 @@ pub struct Release {
     pub notes: String,
     #[serde(skip)]
     pub url: String,
-    /// The installer's SHA-256 as GitHub lists it (`digest`), lowercase hex.
+    /// The installer's SHA-256 as the release lists it (GitHub's `digest`, the notes' line), lowercase hex.
+    /// The download must match every one; with none it is never run.
     #[serde(skip)]
-    pub sha256: Option<String>,
+    pub sha256: Vec<String>,
 }
 
 /// What the update banner shows (`UpdateState` in src/lib/types.ts).
@@ -66,7 +68,17 @@ fn failed(message: String) -> State {
 }
 
 static STATE: Lazy<Mutex<State>> = Lazy::new(|| Mutex::new(State::Idle));
-static CANCEL: AtomicBool = AtomicBool::new(false);
+/// The number of the download that may go on: Cancel and every new download move it on, so an older
+/// download stops at its next chunk instead of carrying on next to the new one.
+static DOWNLOAD: AtomicU64 = AtomicU64::new(0);
+
+fn current(id: u64) -> bool {
+    DOWNLOAD.load(SeqCst) == id
+}
+
+fn next_download() -> u64 {
+    DOWNLOAD.fetch_add(1, SeqCst) + 1
+}
 
 fn lock() -> MutexGuard<'static, State> {
     STATE.lock().unwrap_or_else(|e| e.into_inner())
@@ -145,21 +157,46 @@ pub fn parse_release(json: &str) -> Option<Release> {
         page: r.html_url.filter(|u| u.starts_with("https://")).unwrap_or_else(releases_page),
         notes: highlights(r.body.as_deref().unwrap_or("")),
         url: asset.browser_download_url.clone(),
-        sha256: asset.digest.as_deref().and_then(|d| d.strip_prefix("sha256:")).map(str::to_ascii_lowercase),
+        sha256: asset
+            .digest
+            .as_deref()
+            .and_then(|d| d.strip_prefix("sha256:"))
+            .map(str::to_ascii_lowercase)
+            .into_iter()
+            .chain(notes_sha256(r.body.as_deref().unwrap_or("")))
+            .collect(),
     })
 }
 
-/// Refuses an installer whose SHA-256 differs from the one GitHub lists for it.
-pub fn verify_digest(actual: &str, expected: Option<&str>) -> Result<(), String> {
-    match expected {
-        Some(e) if !actual.trim().eq_ignore_ascii_case(e.trim()) => {
-            Err("The download does not match the release (checksum mismatch), so it was not installed.".into())
+/// The installer's SHA-256 from the release notes: "SHA-256 of the installer: `…`", the line
+/// .github/workflows/release.yml writes at the end (the last such line counts).
+pub fn notes_sha256(body: &str) -> Option<String> {
+    let line = body.lines().rev().find(|l| l.contains("SHA-256 of the installer:"))?;
+    let hex = line.split('`').nth(1)?.trim();
+    (hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit())).then(|| hex.to_ascii_lowercase())
+}
+
+/// Refuses an installer the release gives no SHA-256 for, or whose SHA-256 differs from any it gives.
+pub fn verify_digest(actual: &str, expected: &[String]) -> Result<(), String> {
+    if expected.is_empty() {
+        return Err("The release lists no SHA-256 checksum for its installer, so it was not installed.".into());
+    }
+    if expected.iter().any(|e| !actual.trim().eq_ignore_ascii_case(e.trim())) {
+        return Err("The download does not match the release (checksum mismatch), so it was not installed.".into());
+    }
+    Ok(())
+}
+
+/// The SHA-256 of an open file, read from its start.
+fn sha256_of(file: &mut std::fs::File) -> Result<String, String> {
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; 1 << 16];
+    loop {
+        let n = file.read(&mut buf).map_err(|e| format!("Could not read the installer: {e}"))?;
+        if n == 0 {
+            return Ok(hex::encode(hasher.finalize()));
         }
-        Some(_) => Ok(()),
-        None => {
-            activity::info("Update", "GitHub listed no checksum for the installer, so it could not be compared.");
-            Ok(())
-        }
+        hasher.update(&buf[..n]);
     }
 }
 
@@ -262,27 +299,26 @@ pub fn cancel() {
     let mut s = lock();
     if let State::Downloading { release, .. } = &*s {
         let release = release.clone();
-        CANCEL.store(true, SeqCst);
+        next_download();
         set_locked(&mut s, State::Available { release });
     }
 }
 
 /// Downloads, checks and runs the installer of the offered release.
 pub fn install() -> Result<(), String> {
-    let release = {
+    let (release, id) = {
         let mut s = lock();
         let State::Available { release } = &*s else {
             return Err("There is no update to install.".into());
         };
         let release = release.clone();
-        CANCEL.store(false, SeqCst);
         set_locked(&mut s, State::Downloading { release: release.clone(), progress: 0.0 });
-        release
+        (release, next_download())
     };
     tauri::async_runtime::spawn(async move {
-        match download(&release).await {
-            Ok(file) => run_installer(release, file).await,
-            Err(e) if e == CANCELLED => {}
+        match download(&release, id).await {
+            Ok(file) => run_installer(release, file, id).await,
+            Err(e) if e == CANCELLED || !current(id) => {}
             Err(e) => fail(e),
         }
     });
@@ -294,9 +330,12 @@ fn fail(message: String) {
     set(failed(message));
 }
 
-fn progress(fraction: f64) {
+fn progress(id: u64, fraction: f64) {
     let p = (fraction.clamp(0.0, 1.0) * 100.0).floor() / 100.0;
     let mut s = lock();
+    if !current(id) {
+        return;
+    }
     if let State::Downloading { release, progress } = &*s {
         if *progress != p {
             let release = release.clone();
@@ -311,9 +350,18 @@ fn installer_name(version: &str) -> String {
     format!("Lampion-{}-setup.exe", if safe.is_empty() { "update" } else { &safe })
 }
 
-async fn download(release: &Release) -> Result<PathBuf, String> {
-    let dir = paths::local_data().join("updates");
+/// Downloads into a folder of its own (`updates\<id>`), so a cancelled download never touches a newer one.
+async fn download(release: &Release, id: u64) -> Result<PathBuf, String> {
+    let dir = paths::local_data().join("updates").join(id.to_string());
     std::fs::create_dir_all(&dir).map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
+    let result = fetch(release, id, &dir).await;
+    if result.is_err() {
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    result
+}
+
+async fn fetch(release: &Release, id: u64, dir: &std::path::Path) -> Result<PathBuf, String> {
     let file = dir.join(installer_name(&release.version));
     let part = file.with_extension("part");
     let resp = client(None)?.get(&release.url).send().await.map_err(|e| format!("The download failed. {e}"))?;
@@ -327,7 +375,7 @@ async fn download(release: &Release) -> Result<PathBuf, String> {
     let mut stream = resp.bytes_stream();
     let written: Result<(), String> = async {
         while let Some(chunk) = stream.next().await {
-            if CANCEL.load(SeqCst) {
+            if !current(id) {
                 return Err(CANCELLED.to_string());
             }
             let chunk = chunk.map_err(|e| format!("The download broke off. {e}"))?;
@@ -335,45 +383,61 @@ async fn download(release: &Release) -> Result<PathBuf, String> {
             hasher.update(&chunk);
             done += chunk.len() as u64;
             if let Some(total) = total {
-                progress(done as f64 / total as f64);
+                progress(id, done as f64 / total as f64);
             }
         }
         out.flush().map_err(|e| e.to_string())
     }
     .await;
     drop(out);
-    let checked = written.and_then(|()| verify_digest(&hex::encode(hasher.finalize()), release.sha256.as_deref()));
-    if let Err(e) = checked {
-        let _ = std::fs::remove_file(&part);
-        return Err(e);
-    }
-    let _ = std::fs::remove_file(&file);
+    written.and_then(|()| verify_digest(&hex::encode(hasher.finalize()), &release.sha256))?;
     std::fs::rename(&part, &file).map_err(|e| format!("Could not save {}: {e}", file.display()))?;
     Ok(file)
 }
 
-async fn run_installer(release: Release, file: PathBuf) {
-    if CANCEL.load(SeqCst) {
-        let _ = std::fs::remove_file(&file);
-        return; // cancelled in the last moment: the offer stays
+/// The installer held open, so nobody can change or replace it, once its bytes on disk match the release.
+fn hold_matching(file: &std::path::Path, sha256: &[String]) -> Result<std::fs::File, String> {
+    let mut held = trust::hold(file).map_err(|e| format!("Could not open the installer: {e}"))?;
+    verify_digest(&sha256_of(&mut held)?, sha256)?;
+    Ok(held)
+}
+
+/// `hold_matching`, and its signature checked (a valid one, or none: Lampion's releases are not signed yet).
+fn checked_installer(file: &std::path::Path, sha256: &[String]) -> Result<std::fs::File, String> {
+    let held = hold_matching(file, sha256)?;
+    match trust::check(file) {
+        trust::Signature::Valid => activity::info("Update", "The installer's signature is valid"),
+        trust::Signature::Unsigned => activity::info("Update", "The installer is not signed; its SHA-256 checksum matches the release"),
+        trust::Signature::Invalid(code) => {
+            return Err(format!("The downloaded installer is damaged: its signature is not valid (0x{code:08X})."))
+        }
+    }
+    Ok(held)
+}
+
+async fn run_installer(release: Release, file: PathBuf, id: u64) {
+    let discard = |file: &PathBuf| {
+        let _ = file.parent().map(std::fs::remove_dir_all);
+    };
+    if !current(id) {
+        return discard(&file); // cancelled in the last moment: the offer stays
     }
     set(State::Installing { release: release.clone() });
-    let path = file.clone();
-    match tauri::async_runtime::spawn_blocking(move || trust::check(&path)).await {
-        Ok(trust::Signature::Valid) => activity::info("Update", "The installer's signature is valid"),
-        Ok(trust::Signature::Unsigned) => {
-            activity::info("Update", "The installer is not signed; Lampion checked it by its SHA-256 checksum")
-        }
-        Ok(trust::Signature::Invalid(code)) => {
-            let _ = std::fs::remove_file(&file);
-            return fail(format!("The downloaded installer is damaged: its signature is not valid (0x{code:08X})."));
+    let (path, sha256) = (file.clone(), release.sha256.clone());
+    let held = match tauri::async_runtime::spawn_blocking(move || checked_installer(&path, &sha256)).await {
+        Ok(Ok(held)) => held,
+        Ok(Err(e)) => {
+            discard(&file);
+            return fail(e);
         }
         Err(e) => return fail(e.to_string()),
-    }
+    };
     activity::info("Update", &format!("Installing Lampion {}; Lampion opens again in a moment", release.version));
     // The servers keep running: "Stop servers when Lampion quits" does not apply to an update.
     quit::set_relaunching(true);
-    if let Err(e) = shell::spawn_detached(&file, &["/S", "/UPDATE", "/R"], None) {
+    let started = shell::spawn_detached(&file, &["/S", "/UPDATE", "/R"], None);
+    drop(held);
+    if let Err(e) = started {
         quit::set_relaunching(false);
         return fail(format!("Could not start the installer: {e}"));
     }
@@ -396,7 +460,7 @@ columns; add indexes and foreign keys.\n- **Built-in updates.** Lampion checks G
 itself with one click.\n- The Structure and Query tabs now stay selected when you move between tables.\n\n## Install\n\n1. Download the installer.",
         ),
         url: String::new(),
-        sha256: None,
+        sha256: Vec::new(),
     };
     set(match name {
         "available" | "notes" => State::Available { release },
@@ -447,10 +511,11 @@ mod tests {
     }
 
     const SAMPLE: &str = r###"{"tag_name":"v9.9","html_url":"https://github.com/akitb/lampion-windows/releases/tag/v9.9",
-        "body":"## What's new\r\n\r\n- Faster logs\r\n\r\n## Install\r\n\r\n1. Run it.\r\n\r\nSHA-256 of the installer: `abc`",
+        "body":"## What's new\r\n\r\n- Faster logs\r\n\r\n## Install\r\n\r\n1. Run it.\r\n\r\nSHA-256 of the installer: `ABC123ABC123ABC123ABC123ABC123ABC123ABC123ABC123ABC123ABC123ABCD`",
         "assets":[{"name":"manifest.json","browser_download_url":"https://example.com/manifest.json"},
         {"name":"Lampion-9.9-setup.exe","browser_download_url":"https://example.com/Lampion-9.9-setup.exe",
-         "digest":"sha256:ABC123"}]}"###;
+         "digest":"sha256:ABC123ABC123ABC123ABC123ABC123ABC123ABC123ABC123ABC123ABC123ABCD"}]}"###;
+    const HASH: &str = "abc123abc123abc123abc123abc123abc123abc123abc123abc123abc123abcd";
 
     #[test]
     fn reads_the_release_and_its_installer() {
@@ -458,22 +523,58 @@ mod tests {
         assert_eq!(r.version, "9.9");
         assert_eq!(r.page, "https://github.com/akitb/lampion-windows/releases/tag/v9.9");
         assert_eq!(r.url, "https://example.com/Lampion-9.9-setup.exe", "the installer, not the manifest");
-        assert_eq!(r.sha256.as_deref(), Some("abc123"));
+        assert_eq!(r.sha256, [HASH, HASH], "GitHub's digest and the notes' line");
         assert_eq!(r.notes, "## What's new\n\n- Faster logs", "only the What's new part");
         assert!(parse_release("{}").is_none());
         assert!(parse_release(r#"{"tag_name":"v1.2","assets":[{"name":"notes.txt","browser_download_url":"https://x/n"}]}"#).is_none());
         let http = SAMPLE.replace("https://example.com/Lampion", "http://example.com/Lampion");
         assert!(parse_release(&http).is_none(), "only https downloads");
-        let no_digest = parse_release(&SAMPLE.replace(r#""digest":"sha256:ABC123""#, r#""label":"x""#)).unwrap();
-        assert_eq!(no_digest.sha256, None);
+        let no_digest = SAMPLE.replace(&format!(r#""digest":"sha256:{}""#, HASH.to_uppercase()), r#""label":"x""#);
+        assert_eq!(parse_release(&no_digest).unwrap().sha256, [HASH], "the notes' line when GitHub gives no digest");
+        let neither = no_digest.replace("SHA-256 of the installer", "Checksum");
+        assert!(parse_release(&neither).unwrap().sha256.is_empty());
     }
 
     #[test]
-    fn refuses_a_download_with_another_checksum() {
+    fn the_notes_give_the_installers_checksum() {
+        let notes = format!("## What's new\n\n- SHA-256 of the installer: `{}` (a fake one in the notes)\n\nSHA-256 of the installer: `{HASH}`\n", "0".repeat(64));
+        assert_eq!(notes_sha256(&notes).as_deref(), Some(HASH), "the last line counts");
+        assert_eq!(notes_sha256("SHA-256 of the installer: `abc`"), None, "64 hex digits only");
+        assert_eq!(notes_sha256("SHA-256 of the installer: abc"), None);
+        assert_eq!(notes_sha256(""), None);
+    }
+
+    #[test]
+    fn refuses_a_download_with_another_checksum_or_none() {
         let good = hex::encode(Sha256::digest(b"installer"));
-        assert!(verify_digest(&good, Some(&good.to_uppercase())).is_ok());
-        assert!(verify_digest(&good, Some(&hex::encode(Sha256::digest(b"tampered")))).is_err());
-        assert!(verify_digest(&good, None).is_ok(), "no digest listed: nothing to compare");
+        let bad = hex::encode(Sha256::digest(b"tampered"));
+        assert!(verify_digest(&good, &[good.to_uppercase()]).is_ok());
+        assert!(verify_digest(&good, &[good.clone(), good.clone()]).is_ok());
+        assert!(verify_digest(&good, &[bad.clone()]).is_err());
+        assert!(verify_digest(&good, &[good.clone(), bad]).is_err(), "every checksum the release gives must match");
+        assert!(verify_digest(&good, &[]).unwrap_err().contains("no SHA-256"), "never installed unchecked");
+    }
+
+    #[test]
+    fn the_file_on_disk_is_hashed_again_and_held_before_it_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("Lampion-9.9-setup.exe");
+        std::fs::write(&f, b"installer").unwrap();
+        let good = hex::encode(Sha256::digest(b"installer"));
+        let held = hold_matching(&f, &[good.clone()]).unwrap();
+        assert!(std::fs::write(&f, b"swapped").is_err(), "nobody can change it while it is held");
+        drop(held);
+        std::fs::write(&f, b"swapped").unwrap();
+        assert!(hold_matching(&f, &[good]).unwrap_err().contains("checksum mismatch"));
+        assert!(checked_installer(&f, &[]).unwrap_err().contains("no SHA-256"));
+    }
+
+    #[test]
+    fn a_new_download_stops_the_older_one() {
+        let first = next_download();
+        assert!(current(first));
+        let second = next_download();
+        assert!(!current(first) && current(second), "the first one stops at its next chunk");
     }
 
     #[test]
@@ -486,7 +587,7 @@ mod tests {
     #[test]
     fn the_banner_state_as_the_ui_reads_it() {
         let v = serde_json::to_value(State::Downloading {
-            release: Release { version: "2.0".into(), page: "p".into(), notes: "n".into(), url: "u".into(), sha256: None },
+            release: Release { version: "2.0".into(), page: "p".into(), notes: "n".into(), url: "u".into(), sha256: Vec::new() },
             progress: 0.5,
         })
         .unwrap();
