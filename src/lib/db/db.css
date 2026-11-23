@@ -1,0 +1,138 @@
+/* Database Manager window: local tokens and shared pieces. Dark values are measured from the macOS
+   screenshots (2-adatbaziskezelo, halved); light values are the macOS light equivalents. Only this
+   window loads this file. */
+:root {
+  --db-toolbar: var(--bg-sidebar);
+  --db-content: var(--surface);
+  --db-bar: #f6f6f7;          /* filter, query, bottom bars and the console */
+  --db-sep: #dcdcdf;          /* bar and header lines */
+  --db-row-sep: #e5e5e8;      /* Tables list rows */
+  --db-alt: #f4f5f5;          /* alternating grid rows */
+  --db-sel: #dcdcdf;          /* selection while the list is not focused */
+  --db-sidebar-sel: #dcdcdf;
+  --db-glass: #ffffff;        /* toolbar capsules */
+  --db-glass-edge: rgba(0, 0, 0, 0.1);
+  --db-glass-sel: #e3e3e6;    /* the chosen tab */
+  --db-search: #e2e2e6;       /* sidebar filter field */
+  --db-menu-btn: #ffffff;     /* Query bar pop-up buttons */
+  --db-table: #0a84ff;        /* sidebar table icon */
+  --db-view: #b648e0;         /* sidebar view icon */
+  --db-tint: var(--tint-mariadb);
+  --db-blue: #007aff;
+  --db-purple: #af52de;
+  --db-teal: #2aa8bf;
+  --db-yellow: #b38900;
+  --db-pink: #ff2d55;
+  --db-orange: #e8790c;
+  --db-gray: #8e8e93;
+  --db-sheet: #f2f2f4;
+  --db-group: #ffffff;
+  --db-field: #ffffff;
+  --db-menu: #f5f5f7;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --db-bar: #1e1e20;
+    --db-sep: #343435;
+    --db-row-sep: #39393a;
+    --db-alt: #292929;
+    --db-sel: #464646;
+    --db-sidebar-sel: #424346;
+    --db-glass: #464647;
+    --db-glass-edge: rgba(255, 255, 255, 0.09);
+    --db-glass-sel: #575758;
+    --db-search: #535559;
+    --db-menu-btn: #38383a;
+    --db-table: #22b1ff;
+    --db-view: #fb5dff;
+    --db-blue: #3f8ff7;
+    --db-purple: #ca43ea;
+    --db-teal: #5fcfdd;
+    --db-yellow: #f8d849;
+    --db-pink: #eb4b63;
+    --db-orange: #f09748;
+    --db-gray: #98989d;
+    --db-sheet: #1e1f21;
+    --db-group: #252628;
+    --db-field: #181819;
+    --db-menu: #2b2b2d;
+  }
+}
+
+/* Type families: colour of type chips and syntax. */
+.fam-integer, .fam-decimal { --fam: var(--db-blue); }
+.fam-text { --fam: var(--green); }
+.fam-temporal { --fam: var(--db-orange); }
+.fam-binary, .fam-spatial { --fam: var(--db-gray); }
+.fam-enumSet { --fam: var(--db-purple); }
+.fam-json { --fam: var(--db-teal); }
+.fam-boolean { --fam: var(--db-pink); }
+.fam-other { --fam: var(--text-2); }
+
+/* A 40px strip above or below content. */
+.dbbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  flex: none;
+  padding: 0 12px;
+  background: var(--db-bar);
+}
+.dbbar.top { border-bottom: 1px solid var(--db-sep); }
+.dbbar.bottom { border-top: 1px solid var(--db-sep); }
+.dbbar .divider { width: 1px; height: 18px; background: var(--db-sep); flex: none; }
+
+/* Borderless icon buttons in bars. */
+.iconbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 26px;
+  height: 26px;
+  min-height: 0;
+  padding: 0 3px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  box-shadow: none;
+  color: var(--text-2);
+}
+.iconbtn:hover:not(:disabled) { background: var(--hover); color: var(--text); }
+.iconbtn.on { color: var(--accent); }
+
+/* macOS bordered push button (header buttons, empty-state actions). */
+.pushbtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  min-height: 0;
+  padding: 0 11px;
+  border: none;
+  border-radius: 7px;
+  background: var(--control);
+  box-shadow: none;
+  color: var(--text);
+  font-size: 13px;
+  white-space: nowrap;
+}
+.pushbtn:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 4%, var(--control)); }
+.pushbtn.prominent { background: var(--accent); color: var(--accent-text); }
+.pushbtn.prominent:hover:not(:disabled) { background: var(--accent); filter: brightness(1.08); }
+.pushbtn.large { height: 28px; padding: 0 14px; border-radius: 14px; }
+
+/* Small grey icon + text (engine, rows, size…). */
+.metachip { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--text-2); white-space: nowrap; }
+
+/* How NULL looks everywhere: dim, italic. */
+.nullv { font-family: var(--font); font-size: 11px; font-style: italic; color: var(--text-3); }
+
+/* SF-Symbol-like filled glyphs: a Lucide outline filled with its colour; strokes cut in the background. */
+.filled svg { fill: currentColor; stroke: var(--cut, var(--db-content)); }
+
+@keyframes db-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: no-preference) {
+  .pulsing { animation: db-pulse 1s ease-in-out infinite; }
+}
