@@ -263,3 +263,23 @@ export interface LogSourceInfo {
   path: string;
   exists: boolean;
 }
+
+// ---- app ----
+
+export interface Release {
+  version: string;
+  /** The release on GitHub. */
+  page: string;
+  /** Only the "What's new" part of the release notes (Markdown). */
+  notes: string;
+}
+
+/** The update banner (`update_state`, `update://state`). */
+export type UpdateState =
+  | { state: "idle" }
+  | { state: "checking" }
+  | { state: "upToDate" }
+  | { state: "available"; release: Release }
+  | { state: "downloading"; release: Release; progress: number }
+  | { state: "installing"; release: Release }
+  | { state: "failed"; message: string; /** The releases page ("Download Manually"). */ page: string };

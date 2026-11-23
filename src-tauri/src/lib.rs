@@ -121,6 +121,12 @@ pub fn run() {
             database::commands::db_show_main_window,
             // ---- database (structure, designer) ----
             // ---- app (updater, selftest, quit) ----
+            app::commands::update_check,
+            app::commands::update_state,
+            app::commands::update_install,
+            app::commands::update_cancel,
+            app::commands::update_skip,
+            app::commands::update_later,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Lampion");
