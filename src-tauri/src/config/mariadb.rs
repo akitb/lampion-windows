@@ -1,6 +1,6 @@
 //! my.ini: the MariaDB settings page. Lampion's settings live in the server's `[mysqld]` section;
 //! an empty field means the server's default (the key is commented out). MariaDB checks a temp copy
-//! first (`mariadbd.exe --defaults-extra-file=<copy> --help --verbose`).
+//! first (`mariadbd.exe --defaults-file=<copy> --help --verbose`: only that file, as the server starts).
 
 use super::file::{self, Check, Run};
 use super::ini::{truthy, Dialect, Ini};
@@ -173,9 +173,11 @@ pub fn validate(s: &MariadbSettings) -> Check {
     c
 }
 
-/// MariaDB reads every option and stops at an unknown or invalid one, without starting a server.
+/// MariaDB reads every option and stops at an unknown or invalid one, without starting a server. Like
+/// the real start, it reads only this file (`--defaults-extra-file` would also read C:\my.ini and the
+/// other global option files, so the check could pass or fail on settings the server never sees).
 fn check(run: Run, tmp: &Path) -> Result<(), String> {
-    let arg = format!("--defaults-extra-file={}", tmp.display());
+    let arg = format!("--defaults-file={}", tmp.display());
     let r = run(&paths::mariadbd_exe(), &[&arg, "--help", "--verbose"]);
     if r.ok() {
         return Ok(());
@@ -311,7 +313,7 @@ slow_query_log = 1\r\nslow_query_log_file = \"C:/Lampion/logs/mariadb/slow.log\"
         let logs = dir.path().join("logs");
         let err = save(&path, &b, &d, &reject, &logs.join("slow.log"), &logs.join("general.log")).unwrap_err();
         assert_eq!(err, "MariaDB rejected the new settings, so nothing was changed.\n\nmariadbd: unknown variable 'max_connectionz=300'\nAborting");
-        assert!(args.borrow()[0].starts_with("--defaults-extra-file="), "{:?}", args.borrow());
+        assert!(args.borrow()[0].starts_with("--defaults-file="), "the same option file only, as the server starts: {:?}", args.borrow());
         assert_eq!(&args.borrow()[1..], ["--help", "--verbose"]);
         assert_eq!(std::fs::read_to_string(&path).unwrap(), MY);
 
