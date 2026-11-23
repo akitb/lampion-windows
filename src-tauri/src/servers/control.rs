@@ -294,20 +294,28 @@ fn launch(s: Server) -> Result<(), String> {
     if settings::get().use_services {
         return services::start(s).map_err(|e| fail(s.module(), e));
     }
-    let (exe, args, dir) = match s {
+    let (exe, dir) = match s {
         Server::Apache => {
             php_on_path();
-            (paths::httpd_exe(), vec!["-f".to_string(), paths::httpd_conf().to_string_lossy().into_owned()], paths::apache_dir())
+            (paths::httpd_exe(), paths::apache_dir())
         }
-        Server::Mariadb => {
-            // Only the option file: the datadir and everything else come from my.ini, never from the command line.
-            (paths::mariadbd_exe(), vec![format!("--defaults-file={}", paths::my_ini().display())], paths::mariadb_dir())
-        }
+        Server::Mariadb => (paths::mariadbd_exe(), paths::mariadb_dir()),
     };
+    let args = launch_args(s, &paths::httpd_conf(), &paths::my_ini());
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     shell::spawn_detached(&exe, &args, Some(dir.as_path()))
         .map(|_| ())
         .map_err(|e| fail(s.module(), format!("Could not run {}: {e}", exe.display())))
+}
+
+/// The command line of a background server. Only the config file: the data folder, ports and logs come
+/// from httpd.conf / my.ini and never from the command line (SPEC pitfall: Homebrew's launcher passed an
+/// old `--datadir` that silently beat the setting).
+pub fn launch_args(s: Server, httpd_conf: &Path, my_ini: &Path) -> Vec<String> {
+    match s {
+        Server::Apache => vec!["-f".into(), httpd_conf.to_string_lossy().into_owned()],
+        Server::Mariadb => vec![format!("--defaults-file={}", my_ini.display())],
+    }
 }
 
 /// php8apache2_4.dll and PHP's extensions need DLLs from PHP's folder (libssh2, libcrypto, ICU…).
@@ -557,6 +565,34 @@ mod tests {
         let (probe, waits) = script(vec![up(7)]);
         assert!(!await_stop(probe, |d| waits.borrow_mut().push(d), 4));
         assert_eq!(waits.borrow().len(), 3);
+    }
+
+    #[test]
+    fn servers_start_only_from_their_config_files() {
+        let conf = Path::new(r"C:\My Lampion\config\httpd.conf");
+        let ini = Path::new(r"C:\My Lampion\config\my.ini");
+        assert_eq!(launch_args(Server::Apache, conf, ini), ["-f", r"C:\My Lampion\config\httpd.conf"]);
+        let maria = launch_args(Server::Mariadb, conf, ini);
+        assert_eq!(maria, [r"--defaults-file=C:\My Lampion\config\my.ini"], "nothing may override my.ini");
+    }
+
+    #[test]
+    fn the_queue_runs_actions_in_order() {
+        // Quitting queues its stop behind the running action; nothing ever overlaps or jumps the queue.
+        let order = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let jobs: Vec<_> = (0..5)
+            .map(|i| {
+                let order = order.clone();
+                submit(move || {
+                    std::thread::sleep(Duration::from_millis(if i == 0 { 30 } else { 1 }));
+                    order.lock().unwrap().push(i);
+                })
+            })
+            .collect();
+        for rx in jobs {
+            tauri::async_runtime::block_on(wait(rx)).unwrap();
+        }
+        assert_eq!(*order.lock().unwrap(), [0, 1, 2, 3, 4]);
     }
 
     #[test]
