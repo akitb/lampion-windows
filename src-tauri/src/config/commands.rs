@@ -241,10 +241,11 @@ pub async fn config_set_phpmyadmin_auto_login(enabled: bool) -> Result<(), Strin
 
 // ---- Files: backups, restore, edit ----
 
-/// `apache` | `php` | `mariadb` | `phpmyadmin` → (activity module, file name, path).
+/// `apache` | `vhosts` | `php` | `mariadb` | `phpmyadmin` → (activity module, file name, path).
 fn config_file(id: &str) -> Result<(&'static str, &'static str, PathBuf), String> {
     Ok(match id {
         "apache" => ("Apache", "httpd.conf", paths::httpd_conf()),
+        "vhosts" => ("Apache", "httpd-vhosts.conf", paths::apache_dir().join("conf").join("extra").join("httpd-vhosts.conf")),
         "php" => ("PHP", "php.ini", paths::php_ini()),
         "mariadb" => ("MySQL", "my.ini", paths::my_ini()),
         "phpmyadmin" => ("MySQL", "config.inc.php", paths::pma_config()),
@@ -308,6 +309,22 @@ pub async fn config_edit_file(id: String) -> Result<(), String> {
 #[tauri::command]
 pub async fn config_locations() -> Result<locations::Locations, String> {
     blocking(locations::current).await
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Folders {
+    root: PathBuf,
+    bin: PathBuf,
+    logs: PathBuf,
+    /// Lampion's own activity log file.
+    app_log: PathBuf,
+}
+
+/// The fixed folders of the Locations list (the others come from `config_locations`).
+#[tauri::command]
+pub fn config_folders() -> Folders {
+    Folders { root: paths::root(), bin: paths::bin(), logs: paths::logs(), app_log: paths::local_data().join("Lampion.log") }
 }
 
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";

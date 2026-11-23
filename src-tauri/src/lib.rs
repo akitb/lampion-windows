@@ -88,6 +88,7 @@ pub fn run() {
             config::commands::config_restore,
             config::commands::config_edit_file,
             config::commands::config_locations,
+            config::commands::config_folders,
             config::commands::config_open_at_login,
             config::commands::config_set_open_at_login,
             // ---- logs ----
