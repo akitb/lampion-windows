@@ -47,8 +47,10 @@
     if (previous !== undefined && previous !== signature) untrack(() => store.requestReload());
   });
 
-  // A calm empty canvas while a database is read for the first time; a spinner only if that takes a while.
+  // A calm empty canvas while a database is read for the first time; a spinner only if that takes a while,
+  // counted from each switch (between two databases read for the first time nothing else changes).
   $effect(() => {
+    void database;
     spinner = false;
     if (store.schema || store.loadError) return;
     const t = setTimeout(() => (spinner = true), 450);
