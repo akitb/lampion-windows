@@ -21,13 +21,29 @@ fn line_start(text: &str, line: usize) -> Option<usize> {
     text.match_indices('\n').nth(line - 2).map(|(i, _)| i + 1)
 }
 
-fn find_ci(hay: &str, needle: &str, from: usize) -> Option<usize> {
-    let (h, n) = (hay.to_lowercase(), needle.to_lowercase());
-    // Lowercasing can change byte lengths for a few letters; only trust it when it doesn't.
-    if h.len() != hay.len() || n.len() != needle.len() {
-        return hay[from..].find(needle).map(|p| p + from);
+/// `needle` in `hay` from byte `from` on, ignoring case: (start, end) byte offsets in `hay`. Compared
+/// letter by letter, because lowercasing can change byte lengths (`İ`, the Kelvin sign).
+fn find_ci(hay: &str, needle: &str, from: usize) -> Option<(usize, usize)> {
+    let want: Vec<char> = needle.chars().flat_map(char::to_lowercase).collect();
+    if want.is_empty() {
+        return None;
     }
-    h[from..].find(&n).map(|p| p + from)
+    hay[from..].char_indices().find_map(|(p, _)| {
+        let start = from + p;
+        let mut left = want.as_slice();
+        for (q, c) in hay[start..].char_indices() {
+            for l in c.to_lowercase() {
+                match left.split_first() {
+                    Some((&w, rest)) if w == l => left = rest,
+                    _ => return None,
+                }
+            }
+            if left.is_empty() {
+                return Some((start, start + q + c.len_utf8()));
+            }
+        }
+        None
+    })
 }
 
 /// The part of `stmt` (the failed statement, as sent) that the MariaDB `message` points at.
@@ -48,9 +64,9 @@ pub fn error_range(message: &str, stmt: &str) -> Option<(usize, usize)> {
                 return Some(word_at(stmt, from + p));
             }
         }
-        // The error is at the end of the statement: mark its last word.
+        // The error is at the end of the statement: mark its last word (after a space of any width).
         let end = stmt.trim_end_matches(|c: char| c.is_whitespace() || c == ';').len();
-        let start = stmt[..end].rfind(char::is_whitespace).map_or(0, |p| p + 1);
+        let start = stmt[..end].char_indices().rev().find(|(_, c)| c.is_whitespace()).map_or(0, |(p, c)| p + c.len_utf8());
         return (end > start).then_some((start, end));
     }
 
@@ -64,13 +80,13 @@ pub fn error_range(message: &str, stmt: &str) -> Option<(usize, usize)> {
                     continue;
                 }
                 let mut from = 0;
-                while let Some(p) = find_ci(stmt, name, from) {
+                while let Some((p, e)) = find_ci(stmt, name, from) {
                     let before = stmt[..p].chars().next_back();
-                    let after = stmt[p + name.len()..].chars().next();
+                    let after = stmt[e..].chars().next();
                     if !before.is_some_and(is_word) && !after.is_some_and(is_word) {
-                        return Some((p, p + name.len()));
+                        return Some((p, e));
                     }
-                    from = p + name.len();
+                    from = e;
                 }
             }
         }
@@ -166,6 +182,21 @@ mod tests {
     #[test]
     fn error_at_the_end_marks_the_last_word() {
         assert_eq!(marked("ERROR 1064 (42000): ... near '' at line 1", "SELECT * FROM ;"), "FROM");
+        // A space wider than one byte (no-break, ideographic) before the last word.
+        assert_eq!(marked("ERROR 1064 (42000): ... near '' at line 1", "SELECT * FROM\u{a0}vevő"), "vevő");
+        assert_eq!(marked("ERROR 1064 (42000): ... near '' at line 1", "SELECT\u{3000}x"), "x");
+    }
+
+    #[test]
+    fn case_insensitive_search_stays_on_character_boundaries() {
+        // "İ" lowercases to two characters and the Kelvin sign to a one-byte "k": no slicing by byte counts.
+        assert_eq!(marked("ERROR 1146 (42S02): Table 'shop.i̇k' doesn't exist", "SELECT * FROM İK"), "İK");
+        assert_eq!(marked("ERROR 1054 (42S22): Unknown column 'kör' in 'field list'", "SELECT \u{212A}ÖR, x"), "\u{212A}ÖR");
+        assert_eq!(marked("ERROR 1054 (42S22): Unknown column 'név' in 'field list'", "SELECT NÉV2, Név FROM t"), "Név");
+        for stmt in ["İẞ x", "\u{212A}", "ő", ""] {
+            let _ = error_range("ERROR 1054 (42S22): Unknown column 'ß' in 'field list'", stmt);
+            let _ = error_range("ERROR 1064 (42000): near 'ẞ' at line 1", stmt);
+        }
     }
 
     #[test]

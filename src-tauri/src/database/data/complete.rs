@@ -148,7 +148,9 @@ fn tokens(text: &str) -> Vec<Tok> {
             i = skip_quoted(b, i);
         } else if c == b'`' {
             let end = skip_quoted(b, i);
-            out.push(Tok::Name(text[i + 1..end.saturating_sub(1).max(i + 1)].replace("``", "`")));
+            // An unclosed name runs to the end of the text: only a closing backtick is dropped.
+            let name = &text[i + 1..end];
+            out.push(Tok::Name(name.strip_suffix('`').unwrap_or(name).replace("``", "`")));
             i = end;
         } else if is_line_comment(b, i) {
             i = line_end(b, i);
@@ -326,6 +328,19 @@ mod tests {
         // Keywords are not aliases.
         assert!(aliases("SELECT * FROM customers WHERE id = 1 ORDER BY id").is_empty());
         assert!(aliases("SELECT 'FROM x y' -- FROM a b\n").is_empty());
+    }
+
+    #[test]
+    fn unclosed_names_and_strings_never_split_a_character() {
+        // The name is still being typed: it runs to the end, and its last letter is two bytes.
+        assert_eq!(tokens("SELECT * FROM `shop.vevő"), [Tok::Word("SELECT".into()), Tok::Punct('*'), Tok::Word("FROM".into()), Tok::Name("shop.vevő".into())]);
+        assert_eq!(tokens("x `ő`` `"), [Tok::Word("x".into()), Tok::Name("ő` ".into())]);
+        assert_eq!(tokens("`"), [Tok::Name(String::new())]);
+        for text in ["SELECT `árvíztűrő", "SELECT 'ő", "SELECT \"ű\\", "x.`ő", "/* ő", "-- ő", "`a``ő``", "`ő\\`"] {
+            let _ = tokens(text);
+            let _ = aliases(text);
+            let _ = at_caret(Some("d"), None, text, text);
+        }
     }
 
     #[test]
