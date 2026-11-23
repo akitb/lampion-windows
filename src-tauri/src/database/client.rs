@@ -17,13 +17,17 @@ static POOL: Lazy<Mutex<Option<Pool>>> = Lazy::new(|| Mutex::new(None));
 
 /// Points the client at a port / password (call when MariaDB's port or root access changes).
 pub fn configure(port: u16, password: Option<String>) {
-    let mut t = TARGET.lock().unwrap();
-    if t.port != port || t.password != password {
+    {
+        let mut t = TARGET.lock().unwrap();
+        if t.port == port && t.password == password {
+            return;
+        }
         t.port = port;
         t.password = password;
-        if let Some(p) = POOL.lock().unwrap().take() {
-            tokio::spawn(async move { let _ = p.disconnect().await; });
-        }
+    }
+    // TARGET is released before POOL is taken: conn() holds POOL while opts() locks TARGET.
+    if let Some(p) = POOL.lock().unwrap().take() {
+        tokio::spawn(async move { let _ = p.disconnect().await; });
     }
 }
 
