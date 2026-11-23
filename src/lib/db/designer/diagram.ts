@@ -310,8 +310,10 @@ const n2 = (v: number) => Math.round(v * 100) / 100;
 export const curvePath = (c: Curve) =>
   `M${n2(c.start.x)} ${n2(c.start.y)}C${n2(c.c1.x)} ${n2(c.c1.y)} ${n2(c.c2.x)} ${n2(c.c2.y)} ${n2(c.end.x)} ${n2(c.end.y)}`;
 
-/** The arrowhead into the referenced row: the tip on the card's edge, the base where the line ends. */
-export function arrowPath(c: Curve, half = 4.2): string {
+/** The arrowhead into the referenced row: the tip on the card's edge, the base where the line ends. Half as wide
+ *  as 4.2 points, but at least 2.5 px on screen (zoomed far out), and 15 % more while the line is hovered. */
+export function arrowPath(c: Curve, zoom = 1, hovered = false): string {
+  const half = Math.max(4.2, 2.5 / zoom) * (hovered ? 1.15 : 1);
   const tip = c.end.x - c.endSide * M.arrowLength;
   return `M${n2(tip)} ${n2(c.end.y)}L${n2(c.end.x)} ${n2(c.end.y - half)}L${n2(c.end.x)} ${n2(c.end.y + half)}Z`;
 }

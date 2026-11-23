@@ -262,7 +262,7 @@
         {@const hot = store.hoveredRelation === c.id}
         <g class="rel" class:bright={store.emphasis && bright} class:dim={store.emphasis && !bright}>
           <path class="line" d={curvePath(c)} />
-          <path d={arrowPath(c, hot ? 4.83 : 4.2)} />
+          <path d={arrowPath(c, v.zoom, hot)} />
           <circle cx={c.start.x} cy={c.start.y} />
         </g>
       {/each}

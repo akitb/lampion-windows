@@ -151,6 +151,9 @@ test("a line leaves the FK row and ends with an arrow on the referenced side", (
   assert.deepEqual(right.end, { x: 400 - METRICS.arrowLength, y: 100 + METRICS.headerHeight + 0.5 * METRICS.rowHeight });
   assert.equal(right.endSide, -1);
   assert.equal(arrowPath(right), `M400 ${right.end.y}L392 ${right.end.y - 4.2}L392 ${right.end.y + 4.2}Z`, "the tip touches the card");
+  assert.equal(arrowPath(right, 1, true), `M400 ${right.end.y}L392 ${right.end.y - 4.83}L392 ${right.end.y + 4.83}Z`, "hovered: 15 % more");
+  assert.equal(arrowPath(right, 2), arrowPath(right), "zoomed in it scales with the diagram");
+  assert.equal(arrowPath(right, 0.1), `M400 ${right.end.y}L392 ${right.end.y - 25}L392 ${right.end.y + 25}Z`, "zoomed out: still 2.5 px on screen");
   // Referenced card to the left.
   const [left] = curvesOf(r, frame("orders", 500, 0), frame("customers", 0, 0));
   assert.equal(left.start.x, 500);
