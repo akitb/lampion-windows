@@ -378,3 +378,66 @@ export interface NameCheck {
   problem: string | null;
   plain: boolean;
 }
+
+// ---- database designer ----
+
+/** A column as the Designer shows it. */
+export interface DesignerColumn {
+  name: string;
+  type: string;
+  /** "PRI", "UNI", "MUL" or "". */
+  key: string;
+  nullable: boolean;
+}
+
+/** A table or view card. */
+export interface DesignerTable {
+  name: string;
+  isView: boolean;
+  /** "" for views. */
+  engine: string;
+  columns: DesignerColumn[];
+}
+
+/** One foreign key: `table(columns)` → `refTable(refColumns)`; composite keys have several column pairs. */
+export interface DesignerRelation {
+  name: string;
+  table: string;
+  columns: string[];
+  refSchema: string;
+  refTable: string;
+  refColumns: string[];
+  onDelete: string;
+  onUpdate: string;
+}
+
+/** Everything the Designer draws for one database (`db_designer_schema`, after adding or dropping a relation). */
+export interface DesignerSchema {
+  database: string;
+  tables: DesignerTable[];
+  /** Relations inside the database, drawn as lines. */
+  relations: DesignerRelation[];
+  /** Foreign keys into other databases, shown on the column only. */
+  external: DesignerRelation[];
+}
+
+/** `db_designer_schema`: the schema and where the user dragged the cards (table → [x, y]). */
+export interface DesignerLoad {
+  schema: DesignerSchema;
+  positions: Record<string, [number, number]>;
+}
+
+/** `table.column` becomes a foreign key that refers to `refTable.refColumn`. */
+export interface DesignerNewRelation {
+  table: string;
+  column: string;
+  refTable: string;
+  refColumn: string;
+}
+
+/** `db_designer_preview`: what the relation sheet shows. */
+export interface DesignerPreview {
+  sql: string;
+  warnings: string[];
+  suggestedName: string;
+}
