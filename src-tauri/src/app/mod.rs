@@ -3,10 +3,12 @@
 
 pub mod commands;
 pub mod quit;
+pub mod selftest;
 pub mod trust;
 pub mod updater;
 
 pub fn init(_app: &tauri::AppHandle) {
     let args: Vec<String> = std::env::args().collect();
     updater::start(&args);
+    selftest::start(&args);
 }
