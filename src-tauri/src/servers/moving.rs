@@ -214,12 +214,10 @@ fn rollback(steps: &Steps, old: &Path, new: &Path) {
     }
 }
 
-/// The data folder of a set-up Lampion folder (None when MariaDB was never set up there).
+/// The data folder of a set-up Lampion folder (None when MariaDB was never set up there). A relative
+/// `datadir` counts too: it is resolved like everywhere else (`setup::datadir`).
 fn setup_data(root: &Path) -> Option<PathBuf> {
-    let ini = std::fs::read_to_string(root.join(r"config\my.ini")).unwrap_or_default();
-    let data = configs::my_value(&ini, "datadir")
-        .map(|d| PathBuf::from(d.trim().trim_end_matches(['/', '\\']).replace('/', "\\")))
-        .unwrap_or_else(|| root.join("databases"));
+    let data = setup::datadir(root);
     data.join("mysql").is_dir().then_some(data)
 }
 
@@ -357,6 +355,24 @@ mod tests {
         assert!(std::fs::read_to_string(new.join(r"config\my.ini")).unwrap().contains(&format!("datadir={n}/databases")));
         assert!(std::fs::read_to_string(old.join(r"config\my.ini")).unwrap().contains(&paths::fwd(&old)), "the original is untouched");
         assert_eq!(setup_data(&old), Some(PathBuf::from(old.join("databases").to_string_lossy().replace('/', "\\"))));
+    }
+
+    #[test]
+    fn a_relative_data_folder_is_moved_and_verified_too() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join("Lampion");
+        write(&old.join(r"config\httpd.conf"), "Listen 8080\r\n");
+        write(&old.join(r"config\my.ini"), "[mysqld]\r\ndatadir=data\r\n");
+        assert_eq!(setup_data(&old), None, "no system database yet");
+        write(&old.join(r"bin\mariadb\data\mysql\user.frm"), "frm");
+        assert_eq!(setup_data(&old), Some(old.join(r"bin\mariadb\data")), "relative to MariaDB's base folder, as mariadbd reads it");
+        // The original is checked before a half copy is deleted.
+        let new = dir.path().join("Target");
+        copy_entry(&old, &new).unwrap();
+        let steps = Steps { copying: true, old_data: setup_data(&old), ..Default::default() };
+        std::fs::remove_dir_all(old.join(r"bin\mariadb\data\mysql")).unwrap();
+        assert!(discard_copy(&steps, &old, &new).is_err(), "the original lost its data, so the copy stays");
+        assert!(new.join(r"bin\mariadb\data\mysql\user.frm").is_file());
     }
 
     #[test]

@@ -156,21 +156,9 @@ fn nothing_installed(root: &Path) -> bool {
     !PACKAGES.iter().any(|p| package_ready(root, p.0))
 }
 
-/// MariaDB's data folder as my.ini names it (default `databases\`).
-fn datadir(root: &Path) -> PathBuf {
-    std::fs::read_to_string(root.join(r"config\my.ini"))
-        .ok()
-        .and_then(|t| configs::my_value(&t, "datadir"))
-        .filter(|d| !d.trim().is_empty())
-        .map(|d| {
-            let p = PathBuf::from(d.trim().trim_end_matches(['/', '\\']).replace('/', "\\"));
-            if p.is_absolute() {
-                p
-            } else {
-                root.join(p)
-            }
-        })
-        .unwrap_or_else(|| root.join("databases"))
+/// MariaDB's data folder as my.ini of the Lampion folder `root` names it (default `databases\`).
+pub(super) fn datadir(root: &Path) -> PathBuf {
+    configs::mariadb_datadir(&std::fs::read_to_string(root.join(r"config\my.ini")).unwrap_or_default(), root)
 }
 
 /// What the Lampion folder still lacks, by name; empty = ready.
@@ -700,6 +688,8 @@ mod tests {
         std::fs::write(root.join(r"config\my.ini"), "[mysqld]\r\ndatadir=D:/elsewhere/data\r\n").unwrap();
         assert_eq!(datadir(root), PathBuf::from(r"D:\elsewhere\data"));
         assert!(missing_parts(root).contains(&"the database files".to_string()));
+        std::fs::write(root.join(r"config\my.ini"), "[mysqld]\r\ndatadir=data\r\n").unwrap();
+        assert_eq!(datadir(root), root.join(r"bin\mariadb\data"), "relative to MariaDB's base folder");
         let st = SetupState::missing(root, vec!["the configuration".into()]);
         assert_eq!(st.title, "The server setup is not complete");
         let st = SetupState::missing(root, vec!["PHP".into(), "MariaDB".into(), "the configuration".into()]);

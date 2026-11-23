@@ -384,9 +384,18 @@ pub fn my_value(ini: &str, key: &str) -> Option<String> {
     found
 }
 
+/// MariaDB's data folder as my.ini names it (default `databases\`). A relative `datadir` is relative to
+/// MariaDB's base folder `bin\mariadb`, the folder above mariadbd.exe (MariaDB's sql/mysqld.cc, fix_paths).
+pub fn mariadb_datadir(ini: &str, root: &Path) -> PathBuf {
+    my_value(ini, "datadir")
+        .filter(|d| !d.trim().is_empty())
+        .map(|d| absolute_or(&root.join(r"bin\mariadb"), d.trim().trim_end_matches(['/', '\\'])))
+        .unwrap_or_else(|| root.join("databases"))
+}
+
 /// MariaDB's PID file (`pid-file`, relative to the data folder; default `<datadir>\<computer>.pid`).
 pub fn mariadb_pid_file(ini: &str, root: &Path) -> PathBuf {
-    let datadir = my_value(ini, "datadir").map(|d| absolute_or(root, &d)).unwrap_or_else(|| root.join("databases"));
+    let datadir = mariadb_datadir(ini, root);
     match my_value(ini, "pid-file") {
         Some(v) if !v.is_empty() => absolute_or(&datadir, &v),
         _ => datadir.join(format!("{}.pid", std::env::var("COMPUTERNAME").unwrap_or_default())),
@@ -508,6 +517,11 @@ mod tests {
         assert_eq!(mariadb_pid_file(ini, Path::new(r"C:\L")), PathBuf::from(format!(r"E:\data\{host}.pid")));
         let rel = "[mysqld]\npid-file=x.pid\n";
         assert_eq!(mariadb_pid_file(rel, Path::new(r"C:\L")), PathBuf::from(r"C:\L\databases\x.pid"));
+        // A relative datadir is relative to MariaDB's base folder, as mariadbd resolves it.
+        let data = "[mysqld]\ndatadir=data/\npid-file=x.pid\n";
+        assert_eq!(mariadb_datadir(data, Path::new(r"C:\L")), PathBuf::from(r"C:\L\bin\mariadb\data"));
+        assert_eq!(mariadb_pid_file(data, Path::new(r"C:\L")), PathBuf::from(r"C:\L\bin\mariadb\data\x.pid"));
+        assert_eq!(mariadb_datadir("[mysqld]\ndatadir=D:/db/\n", Path::new(r"C:\L")), PathBuf::from(r"D:\db"));
         assert_eq!(my_value("[client]\nport=1\n", "port"), None, "only server groups count");
         assert_eq!(my_value("[mysqld]\nport=1\nport=2 # later wins\n", "port").as_deref(), Some("2"));
     }

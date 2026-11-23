@@ -51,10 +51,12 @@ fn from_texts(httpd: Option<&str>, my_ini: Option<&str>, php_ini: Option<&str>) 
     };
 
     let my = Ini::new(my_ini.unwrap_or(""), Dialect::MyIni);
+    // MariaDB reads a relative datadir as relative to its base folder (bin\mariadb), like servers::configs.
     let datadir = my
         .value("datadir")
         .filter(|d| !d.trim().is_empty())
         .map(|d| win(d.trim().trim_end_matches(|c| c == '/' || c == '\\')))
+        .map(|d| if d.is_absolute() { d } else { paths::mariadb_dir().join(d) })
         .unwrap_or_else(paths::databases);
     // MariaDB puts relative log names in the data folder.
     let in_data = |v: String| {
@@ -132,6 +134,9 @@ DocumentRoot \"D:/Sites\"\nErrorLog \"logs/error.log\"\n<VirtualHost *:8081>\n  
         assert_eq!(l.mariadb_error_log, None);
         let none = from_texts(None, None, None);
         assert_eq!((none.apache_port, none.document_root), (8080, paths::www()));
+        let relative = from_texts(None, Some("[mysqld]\ndatadir=data/\nlog-error=server\n"), None);
+        assert_eq!(relative.mariadb_datadir, paths::mariadb_dir().join("data"), "relative to MariaDB's base folder");
+        assert_eq!(relative.mariadb_error_log, Some(paths::mariadb_dir().join(r"data\server.err")));
     }
 
     #[test]
