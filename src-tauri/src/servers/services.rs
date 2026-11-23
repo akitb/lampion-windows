@@ -114,12 +114,16 @@ pub fn install_script(root: &Path, log: &Path, user_sid: &str, writable: &[PathB
     lines.join("\r\n")
 }
 
-/// The folders the services write to: the Lampion folder's data, logs, sites and temp files, and the
-/// data folder, web folder and log folders the configuration names elsewhere. Existing ones only.
+/// The folders the services write to: the Lampion folder's data, logs, sites and temp files,
+/// phpMyAdmin's temp folder (its template cache, in the read-only `bin`; made here when phpMyAdmin is
+/// installed), and the data folder, web folder and log folders the configuration names elsewhere.
+/// Existing ones only.
 fn writable_folders(root: &Path) -> Vec<PathBuf> {
     let l = crate::config::locations::current();
     let logs = [Some(l.apache_error_log), Some(l.apache_access_log), l.mariadb_error_log, l.php_error_log, l.slow_query_log, l.general_query_log];
-    let mut dirs: Vec<PathBuf> = ["databases", "logs", "tmp", "www"].iter().map(|d| root.join(d)).collect();
+    // create_dir, not create_dir_all: without phpMyAdmin's folder there is nothing to make.
+    let _ = std::fs::create_dir(root.join(r"bin\phpmyadmin\tmp"));
+    let mut dirs: Vec<PathBuf> = ["databases", "logs", "tmp", "www", r"bin\phpmyadmin\tmp"].iter().map(|d| root.join(d)).collect();
     dirs.extend([l.mariadb_datadir, l.document_root]);
     dirs.extend(logs.into_iter().flatten().filter_map(|f| f.parent().map(Path::to_path_buf)));
     let mut seen = Vec::new();
@@ -264,7 +268,8 @@ mod tests {
     #[test]
     fn services_run_as_local_service_in_a_locked_folder() {
         let root = Path::new(r"C:\My Lampion");
-        let s = install_script(root, Path::new(r"C:\x.log"), SID, &[root.join("databases"), PathBuf::from(r"D:\Sites")]);
+        let writable = [root.join("databases"), root.join(r"bin\phpmyadmin\tmp"), PathBuf::from(r"D:\Sites")];
+        let s = install_script(root, Path::new(r"C:\x.log"), SID, &writable);
         let lines: Vec<&str> = s.lines().collect();
         let at = |needle: &str| lines.iter().position(|l| l.contains(needle)).unwrap_or_else(|| panic!("{needle}"));
         for svc in ["LampionApache", "LampionMariaDB"] {
@@ -280,6 +285,8 @@ mod tests {
         assert!(s.contains(r#"icacls.exe "C:\My Lampion\config" /grant "*S-1-5-19:(OI)(CI)RX""#));
         assert!(s.contains(r#"icacls.exe "C:\My Lampion\databases" /grant "*S-1-5-19:(OI)(CI)M""#));
         assert!(s.contains(r#"icacls.exe "D:\Sites" /grant "*S-1-5-19:(OI)(CI)M""#));
+        let pma = at(r#"icacls.exe "C:\My Lampion\bin\phpmyadmin\tmp" /grant "*S-1-5-19:(OI)(CI)M""#);
+        assert!(pma > at(r#"icacls.exe "C:\My Lampion\bin" /grant"#), "phpMyAdmin's template cache is writable inside the read-only bin");
         assert!(!s.contains(r#""C:\My Lampion\bin" /grant "*S-1-5-19:(OI)(CI)M"#), "the programs stay read-only for the service");
         assert!(s.lines().filter(|l| l.starts_with("icacls.exe")).all(|l| l.ends_with("|| exit /b 16") || l.ends_with("|| exit /b 17")), "a failed step stops the script");
     }
@@ -309,6 +316,10 @@ mod tests {
         let w = writable_folders(dir.path());
         assert!(w.contains(&dir.path().join("www")) && w.contains(&dir.path().join("databases")));
         assert!(!w.contains(&dir.path().join("tmp")), "missing folders are left out");
+        assert!(!dir.path().join("bin").exists(), "no phpMyAdmin: no folder is made for it");
+        std::fs::create_dir_all(dir.path().join(r"bin\phpmyadmin")).unwrap();
+        let pma = dir.path().join(r"bin\phpmyadmin\tmp");
+        assert!(writable_folders(dir.path()).contains(&pma) && pma.is_dir(), "phpMyAdmin's temp folder is made and included");
         let mut keys: Vec<String> = w.iter().map(|p| p.to_string_lossy().to_lowercase()).collect();
         let n = keys.len();
         keys.dedup();
