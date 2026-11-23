@@ -1,0 +1,46 @@
+{
+  "format": 1,
+  "vcRuntime": {
+    "url": "https://aka.ms/vc14/vc_redist.x64.exe",
+    "minVersion": "14.50"
+  },
+  "packages": [
+    {
+      "id": "apache",
+      "name": "Apache",
+      "version": "2.4.66",
+      "url": "https://www.apachelounge.com/download/VS17/binaries/httpd-2.4.66-251206-Win64-VS17.zip",
+      "sha256": "2cd1f349b6705e43e784e876a233eeb1a859fa6b8abc693a91f87b35a368f7f9",
+      "strip": "Apache24",
+      "target": "apache"
+    },
+    {
+      "id": "php",
+      "name": "PHP",
+      "version": "8.4.28",
+      "url": "https://downloads.php.net/~windows/releases/archives/php-8.4.28-Win32-vs17-x64.zip",
+      "mirrors": ["https://downloads.php.net/~windows/releases/php-8.4.28-Win32-vs17-x64.zip"],
+      "sha256": "59ccaa095d0f0c3fbb9f7e2bfd86713ebac032d5783cc22bc8934e2285629999",
+      "strip": "",
+      "target": "php"
+    },
+    {
+      "id": "mariadb",
+      "name": "MariaDB",
+      "version": "11.8.10",
+      "url": "https://archive.mariadb.org/mariadb-11.8.10/winx64-packages/mariadb-11.8.10-winx64.zip",
+      "sha256": "05d04b46763ea3dc9111bfc82dc061e0a158c682a73d31ba34b13f2653c88d17",
+      "strip": "mariadb-11.8.10-winx64",
+      "target": "mariadb"
+    },
+    {
+      "id": "phpmyadmin",
+      "name": "phpMyAdmin",
+      "version": "5.2.3",
+      "url": "https://files.phpmyadmin.net/phpMyAdmin/5.2.3/phpMyAdmin-5.2.3-all-languages.zip",
+      "sha256": "2d2e13c735366d318425c78e4ee2cc8fc648d77faba3ddea2cd516e43885733f",
+      "strip": "phpMyAdmin-5.2.3-all-languages",
+      "target": "phpmyadmin"
+    }
+  ]
+}
