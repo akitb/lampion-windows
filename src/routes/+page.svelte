@@ -37,10 +37,15 @@
 
   import { startServerStatus } from "$lib/servers.svelte";
   import { startLogBadge } from "$lib/logs.svelte";
+  import { config, loadLocations } from "$lib/config/forms.svelte";
 
-  let webFolder = $state("");
+  // The web folder is httpd.conf's DocumentRoot (kept current by `config://locations`); until that is
+  // read, Lampion's default one.
+  let lampionRoot = $state("");
+  const webFolder = $derived(config.locations?.documentRoot || (lampionRoot && lampionRoot + "\\www"));
   $effect(() => {
-    core.appInfo().then((i) => (webFolder = i.lampionRoot + "\\www"));
+    core.appInfo().then((i) => (lampionRoot = i.lampionRoot));
+    void loadLocations();
     startServerStatus();
     startLogBadge();
   });
@@ -94,8 +99,8 @@
       <h1>{all.find((r) => r.pane === app.pane)?.title}</h1>
       <div class="tools" role="toolbar" aria-label="Shortcuts">
         <button onclick={() => core.openDatabaseWindow()} title="Open the built-in database manager (Ctrl+D)" aria-label="Database Manager"><Database size={18} strokeWidth={1.6} /></button>
-        <button onclick={() => core.openPath(webFolder)} title="Open the web folder in Explorer ({webFolder})" aria-label="Web Folder"><Folder size={18} strokeWidth={1.6} /></button>
-        <button onclick={() => core.openTerminal(webFolder)} title="Open a terminal in the web folder" aria-label="Terminal"><SquareTerminal size={18} strokeWidth={1.6} /></button>
+        <button disabled={!webFolder} onclick={() => core.openPath(webFolder)} title="Open the web folder in Explorer ({webFolder})" aria-label="Web Folder"><Folder size={18} strokeWidth={1.6} /></button>
+        <button disabled={!webFolder} onclick={() => core.openTerminal(webFolder)} title="Open a terminal in the web folder" aria-label="Terminal"><SquareTerminal size={18} strokeWidth={1.6} /></button>
         <button disabled={apache.state !== "running"} onclick={() => core.openUrl(`http://localhost:${apache.ports[0] ?? apache.port}/`)}
                 title="Open http://localhost:{apache.ports[0] ?? apache.port}/ in the browser" aria-label="Open Website"><Globe size={18} strokeWidth={1.6} /></button>
       </div>
